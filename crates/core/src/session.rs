@@ -67,6 +67,10 @@ pub struct Session {
     scan_keeps_edits: bool,
     /// A scan queued behind the running one; `Some(true)` = keep edits.
     pending_reload: Option<bool>,
+    /// Job result to repeat in the status line once the follow-up scan replaces it.
+    scan_note: Option<String>,
+    /// Some SteamCMD batch in the current chain succeeded (rescan when the queue drains).
+    steamcmd_succeeded: bool,
     workshop_rx: Option<Receiver<WorkshopMsg>>,
     steamcmd_rx: Option<Receiver<SteamcmdMsg>>,
     pending_steamcmd: Vec<SteamcmdItem>,
@@ -186,6 +190,8 @@ impl Session {
             scan_rx: None,
             scan_keeps_edits: false,
             pending_reload: None,
+            scan_note: None,
+            steamcmd_succeeded: false,
             workshop_rx: None,
             steamcmd_rx: None,
             pending_steamcmd: Vec::new(),
@@ -252,6 +258,16 @@ impl Session {
     /// Rescan after mods changed on disk (downloads, updates, DB refresh); keeps unsaved edits.
     fn rescan(&mut self) {
         self.start_scan(true);
+    }
+
+    /// Rescan and keep `note` visible: now, and again after the scan's "Loaded ..." line.
+    fn rescan_then(&mut self, note: String) {
+        self.rescan();
+        self.status = note.clone();
+        self.scan_note = Some(match self.scan_note.take() {
+            Some(prev) => format!("{prev} · {note}"),
+            None => note,
+        });
     }
 
     fn start_scan(&mut self, keep_edits: bool) {
@@ -345,8 +361,13 @@ impl Session {
         } else {
             String::new()
         };
+        let note = self
+            .scan_note
+            .take()
+            .map(|n| format!("{n} · "))
+            .unwrap_or_default();
         self.status = format!(
-            "Loaded {} mods ({} active){}{extra}{config_note}",
+            "{note}Loaded {} mods ({} active){}{extra}{config_note}",
             self.mods.len(),
             self.active_paths.len(),
             data.rules_note
@@ -543,6 +564,9 @@ impl Session {
         match write_mods_config(&path, &self.mods_config) {
             Ok(_) => {
                 self.dirty = false;
+                // The written file only has resolvable IDs, so the "missing" warnings are gone.
+                self.missing_from_disk.clear();
+                self.refresh_issues();
                 self.status = format!("Wrote {}", path.display());
                 info!("wrote {}", path.display());
             }
@@ -751,7 +775,7 @@ impl Session {
             Some(Ok(FetchMsg::Done(report))) => {
                 self.fetch_rx = None;
                 if report.any_updated() {
-                    self.rescan();
+                    self.rescan_then(report.status_line());
                 } else {
                     self.status = report.status_line();
                 }
@@ -896,14 +920,21 @@ impl Session {
             Some(Ok(SteamcmdMsg::Done(report))) => {
                 self.steamcmd_rx = None;
                 for (id, _) in &report.failed {
-                    self.pending_activate.remove(id);
+                    let retry_queued = self
+                        .pending_steamcmd
+                        .iter()
+                        .any(|i| &i.published_file_id == id);
+                    if !retry_queued {
+                        self.pending_activate.remove(id);
+                    }
                 }
+                self.steamcmd_succeeded |= report.any_success();
                 self.status = report.status_line();
                 if !self.pending_steamcmd.is_empty() {
                     let more = std::mem::take(&mut self.pending_steamcmd);
                     self.start_steamcmd(more);
-                } else if report.any_success() {
-                    self.rescan();
+                } else if std::mem::take(&mut self.steamcmd_succeeded) {
+                    self.rescan_then(report.status_line());
                 }
             }
             Some(Err(())) => {
@@ -1020,13 +1051,6 @@ impl Session {
             self.status = "GitHub: no tracked mod selected".into();
             return;
         };
-        if self.github_update_tag(&entry).as_deref() == Some(entry.installed_version.as_str()) {
-            self.status = format!(
-                "GitHub: {} already at {}",
-                entry.owner_repo, entry.installed_version
-            );
-            return;
-        }
         self.enqueue_github(GithubJob::Update {
             items: vec![GithubUpdateItem {
                 owner_repo: entry.owner_repo,
@@ -1066,8 +1090,7 @@ impl Session {
         }
         self.github_mods.remove_path(&entry.mod_path);
         if self.persist_github_mods() {
-            self.status = format!("GitHub: deleted {}", entry.owner_repo);
-            self.rescan();
+            self.rescan_then(format!("GitHub: deleted {}", entry.owner_repo));
         }
     }
 
@@ -1146,8 +1169,7 @@ impl Session {
                     self.pending_path_activate.insert(path);
                 }
                 let warn = warning.map(|w| format!(" ({w})")).unwrap_or_default();
-                self.rescan();
-                self.status = format!("GitHub: installed {owner_repo} @{version}{warn}");
+                self.rescan_then(format!("GitHub: installed {owner_repo} @{version}{warn}"));
                 events.push(Event::GithubInstalled);
             }
             GithubReport::Updated { succeeded, failed } => {
@@ -1159,10 +1181,12 @@ impl Session {
                 }
                 let _ = self.persist_github_mods();
                 let any_success = !succeeded.is_empty();
+                let line = GithubReport::Updated { succeeded, failed }.status_line();
                 if any_success {
-                    self.rescan();
+                    self.rescan_then(line);
+                } else {
+                    self.status = line;
                 }
-                self.status = GithubReport::Updated { succeeded, failed }.status_line();
             }
             GithubReport::Checked { updates, errors } => {
                 let auto: Vec<GithubUpdateItem> = updates
@@ -1287,8 +1311,7 @@ impl Session {
             }
         }
         self.git_items.retain(|i| i.path != item.path);
-        self.rescan();
-        self.status = format!("Git: deleted {}", item.name);
+        self.rescan_then(format!("Git: deleted {}", item.name));
     }
 
     fn enqueue_git(&mut self, job: GitJob) {
@@ -1343,8 +1366,7 @@ impl Session {
                     self.pending_path_activate.insert(dest);
                 }
                 let warn = warning.map(|w| format!(" ({w})")).unwrap_or_default();
-                self.rescan();
-                self.status = format!("Git: cloned {origin} @{short_sha}{warn}");
+                self.rescan_then(format!("Git: cloned {origin} @{short_sha}{warn}"));
                 events.push(Event::GitCloned);
             }
             GitReport::Checked { items } => {
@@ -1362,10 +1384,12 @@ impl Session {
             }
             GitReport::Pulled { succeeded, failed } => {
                 let any = !succeeded.is_empty();
+                let line = GitReport::Pulled { succeeded, failed }.status_line();
                 if any {
-                    self.rescan();
+                    self.rescan_then(line);
+                } else {
+                    self.status = line;
                 }
-                self.status = GitReport::Pulled { succeeded, failed }.status_line();
             }
             GitReport::Failed(e) => self.status = format!("Git: {e}"),
         }
@@ -1518,6 +1542,34 @@ mod tests {
         s.git_pull(&path);
         assert!(!s.is_busy());
         assert!(s.status.contains("detached"));
+    }
+
+    #[test]
+    fn job_note_survives_the_follow_up_scan() {
+        let mut s = fixture_session();
+        s.scan_note = Some("DBs: community updated · steam failed (timeout)".into());
+        s.apply_reload(collect_reload(&s.settings).unwrap());
+        assert!(s.status.starts_with("DBs: community updated · steam failed (timeout) · Loaded"));
+        assert!(s.scan_note.is_none());
+    }
+
+    #[test]
+    fn save_clears_missing_id_warnings() {
+        let mut s = fixture_session();
+        let dir = std::env::temp_dir().join(format!("rimtui-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        s.settings.config_dir = dir.clone();
+        let cfg = ModsConfig {
+            active_mods: vec!["ludeon.rimworld".into(), "ghost.notinstalled".into()],
+            ..ModsConfig::default()
+        };
+        write_mods_config(&s.settings.mods_config_path(), &cfg).unwrap();
+        s.apply_reload(collect_reload(&s.settings).unwrap());
+        assert_eq!(s.missing_from_disk, vec!["ghost.notinstalled".to_string()]);
+        s.save_mods_config();
+        assert!(s.missing_from_disk.is_empty());
+        assert!(!s.issues.iter().any(|i| i.message.contains("ghost.notinstalled")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

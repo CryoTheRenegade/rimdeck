@@ -234,12 +234,20 @@ impl App {
                     self.workshop_selected = 0;
                     let len = self.session.workshop_items.len();
                     clamp_list(&mut self.workshop_selected, &mut self.workshop_state, len);
-                    self.input_mode = InputMode::Normal;
+                    self.leave_query(Screen::Workshop, InputMode::WorkshopQuery);
                 }
-                session::Event::GithubInstalled | session::Event::GitCloned => {
-                    self.input_mode = InputMode::Normal;
+                session::Event::GithubInstalled => {
+                    self.leave_query(Screen::Github, InputMode::GithubQuery);
                 }
+                session::Event::GitCloned => self.leave_query(Screen::Git, InputMode::GitQuery),
             }
+        }
+    }
+
+    /// A job finished: leave its query box, but only if the user is still in it.
+    fn leave_query(&mut self, screen: Screen, mode: InputMode) {
+        if self.screen == screen && self.input_mode == mode {
+            self.input_mode = InputMode::Normal;
         }
     }
 
