@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ddsify.workspace = true
 directories = "6"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 roxmltree = "0.20"
@@ -19,3 +20,6 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+
+[dev-dependencies]
+image.workspace = true

@@ -987,6 +987,8 @@ impl App {
             KeyCode::Char('b') => self.toggle_user_load_bottom(),
             KeyCode::Char('d') => self.start_fetch(false),
             KeyCode::Char('D') => self.build_db(),
+            KeyCode::Char('o') => self.optimize_textures(false),
+            KeyCode::Char('O') => self.optimize_textures(true),
             KeyCode::Char('n') => self.open_workshop_search(),
             KeyCode::Char('h') => self.open_github(),
             KeyCode::Char('G') => self.open_git(),

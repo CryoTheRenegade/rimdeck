@@ -372,6 +372,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("g", "launch"),
     ("d", "fetch"),
     ("D", "build db"),
+    ("o/O", "textures"),
     ("n", "workshop"),
     ("h", "github"),
     ("G", "git"),
@@ -1006,6 +1007,7 @@ rimtui — RimSort-style RimWorld mod manager
   g               launch RimWorld (exe, else Steam)
   d               download community rules + Steam DB
   D               add installed Workshop mods to steamDB.json (build-db)
+  o / O           optimize active mods' textures to DDS / delete those DDS
   n               workshop search (Steam WebAPI)
   h               GitHub release mods (track, update)
   G               git clone / pull HEAD (GitLab, GitGud, Forgejo, …)

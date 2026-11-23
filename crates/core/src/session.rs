@@ -84,6 +84,7 @@ pub struct Session {
     github_auto_after_check: bool,
     git_rx: Option<Receiver<GitMsg>>,
     dbbuild_rx: Option<Receiver<std::result::Result<String, String>>>,
+    textures_rx: Option<Receiver<TextureMsg>>,
     /// Paths the current mod list was scanned from; Save is refused if settings moved away.
     loaded_paths: Option<ScanPaths>,
     pending_git: Vec<GitJob>,
@@ -161,6 +162,11 @@ fn load_external_metadata() -> (RulesDb, RulesDb, SteamDb, String) {
 }
 
 /// `Some(Ok)` = message, `Some(Err)` = worker hung up, `None` = nothing yet.
+enum TextureMsg {
+    Progress(String),
+    Done(String),
+}
+
 fn try_take<T>(rx: &Option<Receiver<T>>) -> Option<Result<T, ()>> {
     match rx.as_ref()?.try_recv() {
         Ok(msg) => Some(Ok(msg)),
@@ -202,6 +208,7 @@ impl Session {
             pending_steamcmd: Vec::new(),
             pending_activate: Vec::new(),
             dbbuild_rx: None,
+            textures_rx: None,
             pending_path_activate: HashSet::new(),
             github_rx: None,
             pending_github: Vec::new(),
@@ -233,6 +240,7 @@ impl Session {
             || self.github_rx.is_some()
             || self.git_rx.is_some()
             || self.dbbuild_rx.is_some()
+            || self.textures_rx.is_some()
     }
 
     pub fn steamcmd_running(&self) -> bool {
@@ -253,6 +261,7 @@ impl Session {
         self.poll_github(&mut events);
         self.poll_git(&mut events);
         self.poll_dbbuild();
+        self.poll_textures();
         events
     }
 
@@ -861,6 +870,60 @@ impl Session {
             Ok(Ok(summary)) => self.rescan_then(format!("Steam DB built: {summary}")),
             Ok(Err(e)) => self.status = format!("Steam DB build failed: {e}"),
             Err(()) => self.status = "Steam DB build ended unexpectedly".into(),
+        }
+    }
+
+    /// Encode the active mods' `Textures` PNGs to DDS (RimSort's todds "optimize"), or with
+    /// `clean` delete the DDS files that sit next to a PNG. DLC is left alone.
+    pub fn optimize_textures(&mut self, clean: bool) {
+        if self.textures_rx.is_some() {
+            self.status = "Already processing textures".into();
+            return;
+        }
+        let roots: Vec<PathBuf> = self
+            .active_paths
+            .iter()
+            .filter(|p| self.mod_ref(p).is_some_and(|m| m.source != ModSource::Dlc))
+            .cloned()
+            .collect();
+        if roots.is_empty() {
+            self.status = "Textures: no active mods".into();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        match std::thread::Builder::new()
+            .name("rimtui-textures".into())
+            .spawn(move || {
+                let _ = tx.send(TextureMsg::Done(run_textures(&roots, clean, &tx)));
+            }) {
+            Ok(_) => {
+                self.textures_rx = Some(rx);
+                self.status = "Textures: scanning...".into();
+            }
+            Err(e) => self.status = format!("Could not start texture thread: {e}"),
+        }
+    }
+
+    fn poll_textures(&mut self) {
+        let Some(rx) = &self.textures_rx else {
+            return;
+        };
+        // Drain: one message per file would otherwise queue far behind the 100 ms poll.
+        loop {
+            match rx.try_recv() {
+                Ok(TextureMsg::Progress(msg)) => self.status = msg,
+                Ok(TextureMsg::Done(msg)) => {
+                    self.status = msg;
+                    self.textures_rx = None;
+                    return;
+                }
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.status = "Texture job ended unexpectedly".into();
+                    self.textures_rx = None;
+                    return;
+                }
+            }
         }
     }
 
@@ -1550,6 +1613,58 @@ pub fn init_tracing() {
         .init();
 }
 
+/// Run ddsify over each mod folder in turn; returns the summary line.
+fn run_textures(roots: &[PathBuf], clean: bool, tx: &mpsc::Sender<TextureMsg>) -> String {
+    let opts = ddsify::Options::rimworld();
+    let start = std::time::Instant::now();
+    let (mut done, mut skipped, mut failed) = (0, 0, 0);
+    for (i, root) in roots.iter().enumerate() {
+        let name = root.file_name().unwrap_or_default().to_string_lossy();
+        let progress = |p: ddsify::Progress| {
+            let _ = tx.send(TextureMsg::Progress(format!(
+                "Textures: mod {}/{} {name}: {}/{}",
+                i + 1,
+                roots.len(),
+                p.done,
+                p.total
+            )));
+        };
+        let result = if clean {
+            ddsify::clean(root, &opts, progress)
+        } else {
+            ddsify::optimize(root, &opts, progress)
+        };
+        match result {
+            Ok(r) => {
+                done += r.done;
+                skipped += r.skipped;
+                failed += r.failed.len();
+                for (path, err) in r.failed {
+                    tracing::warn!("texture {}: {err}", path.display());
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                tracing::warn!("textures in {}: {e}", root.display());
+            }
+        }
+    }
+    let secs = start.elapsed().as_secs();
+    let failed = if failed > 0 {
+        format!(", {failed} failed (see log)")
+    } else {
+        String::new()
+    };
+    if clean {
+        format!("Textures: deleted {done} DDS file(s) in {} mods{failed} ({secs}s)", roots.len())
+    } else {
+        format!(
+            "Textures: encoded {done}, {skipped} up to date, in {} mods{failed} ({secs}s)",
+            roots.len()
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1715,6 +1830,25 @@ mod tests {
         assert_eq!(s.active_paths.last(), Some(&path));
         assert!(s.dirty);
         assert!(s.status.contains("activated 1, downloading 0"));
+    }
+
+    #[test]
+    fn textures_optimize_then_clean() {
+        let dir = std::env::temp_dir().join(format!("rimtui-tex-{}", std::process::id()));
+        let tex = dir.join("Textures");
+        std::fs::create_dir_all(&tex).unwrap();
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([200, 10, 10, 255]))
+            .save(tex.join("a.png"))
+            .unwrap();
+        let (tx, rx) = mpsc::channel();
+        let msg = run_textures(std::slice::from_ref(&dir), false, &tx);
+        assert!(msg.contains("encoded 1"), "{msg}");
+        assert!(tex.join("a.dds").is_file());
+        assert!(matches!(rx.try_recv(), Ok(TextureMsg::Progress(_))));
+        let msg = run_textures(std::slice::from_ref(&dir), true, &tx);
+        assert!(msg.contains("deleted 1"), "{msg}");
+        assert!(!tex.join("a.dds").exists() && tex.join("a.png").is_file());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

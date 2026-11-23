@@ -112,6 +112,7 @@ enum Message {
     /// Enter in a mod search box: select the first match (`true` = active list).
     SearchSubmit(bool),
     BuildDb,
+    Textures { clean: bool },
     Select(PathBuf),
     Toggle(PathBuf),
     InactiveSearch(String),
@@ -331,6 +332,7 @@ impl Gui {
         match message {
             Message::Key(_) | Message::SearchSubmit(_) => {} // handled in `update`
             Message::BuildDb => s.build_db(),
+            Message::Textures { clean } => s.optimize_textures(clean),
             Message::Tick => {
                 for ev in s.poll() {
                     match ev {
@@ -513,6 +515,12 @@ impl Gui {
                 .style(button::secondary),
             button("Build DB")
                 .on_press(Message::BuildDb)
+                .style(button::secondary),
+            button("Optimize textures")
+                .on_press(Message::Textures { clean: false })
+                .style(button::secondary),
+            button("Delete DDS")
+                .on_press(Message::Textures { clean: true })
                 .style(button::secondary),
             button("Run game").on_press(Message::Launch),
         ]

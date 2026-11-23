@@ -14,6 +14,8 @@ GUI: RimSort-style main window (mod info with preview, inactive/active lists wit
 
 Both frontends also have: a per-mod rule editor (user loadAfter/loadBefore/loadTop/loadBottom in `userRules.json`), duplicate-install and game-version warnings, Steam Workshop collection import, and instances (named sets of game/mods/workshop/config paths, picked with the Instance setting: a new name creates one, an existing name switches, `-name` deletes).
 
+Texture optimization (RimSort's todds feature) uses [ddsify](../../rimdds): `Textures` PNGs in active non-DLC mods become BC1/BC7 DDS with mipmaps, re-encoded only when the PNG is newer. "Delete DDS" removes DDS files that sit next to a PNG. Building needs the `rimdds` repo checked out next to this one (`../../rimdds` from the workspace root).
+
 `rimtui build-db [--out PATH] [--no-deps]` merges installed mods into `steamDB.json` (with a Steam WebAPI key it also fetches Workshop "required items" as dependencies).
 
 ## Layout
@@ -57,6 +59,7 @@ Keyboard: ↑/↓ select, Ctrl+↑/↓ move the selected active mod, Enter activ
 | `g` | Launch RimWorld (`RimWorldWin64.exe`, else `steam://run/294100`) |
 | `d` | Download/update community rules and Steam DB from configured URLs |
 | `D` | Build DB: merge installed Workshop mods into `steamDB.json` |
+| `o` / `O` | Optimize active mods' textures to DDS / delete those DDS files |
 | `n` | Workshop search (Steam WebAPI; key in settings or `STEAM_WEB_API_KEY`) |
 | `h` | GitHub release mods (install from URL, check/update, auto-update) |
 | `G` | Git updater (clone/pull HEAD from any git host; needs `git` on PATH) |
