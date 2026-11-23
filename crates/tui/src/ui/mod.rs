@@ -371,6 +371,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("e", "export"),
     ("g", "launch"),
     ("d", "fetch"),
+    ("D", "build db"),
     ("n", "workshop"),
     ("h", "github"),
     ("G", "git"),
@@ -506,6 +507,8 @@ fn wrap_one_line(line: &str, width: usize) -> usize {
     lines.max(1)
 }
 
+const INSTANCE_HINT: &str = "Instance: a new name creates one, an existing name switches, -name deletes";
+
 fn draw_settings(frame: &mut Frame, app: &App) {
     let area = centered(frame.area(), 84, 28);
     frame.render_widget(Clear, area);
@@ -517,6 +520,7 @@ fn draw_settings(frame: &mut Frame, app: &App) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("Up/Down select  Enter edit/cycle  s save  Esc back"),
+        Line::from(INSTANCE_HINT),
         Line::from(""),
     ];
     for field in SettingsField::ALL {
@@ -1001,6 +1005,7 @@ rimtui — RimSort-style RimWorld mod manager
   e               export a mod list XML
   g               launch RimWorld (exe, else Steam)
   d               download community rules + Steam DB
+  D               add installed Workshop mods to steamDB.json (build-db)
   n               workshop search (Steam WebAPI)
   h               GitHub release mods (track, update)
   G               git clone / pull HEAD (GitLab, GitGud, Forgejo, …)

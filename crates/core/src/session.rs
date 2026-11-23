@@ -76,12 +76,14 @@ pub struct Session {
     workshop_rx: Option<Receiver<WorkshopMsg>>,
     steamcmd_rx: Option<Receiver<SteamcmdMsg>>,
     pending_steamcmd: Vec<SteamcmdItem>,
-    pending_activate: HashSet<String>,
+    /// Published file IDs to activate after the next scan, in request order.
+    pending_activate: Vec<String>,
     pending_path_activate: HashSet<PathBuf>,
     github_rx: Option<Receiver<GithubMsg>>,
     pending_github: Vec<GithubJob>,
     github_auto_after_check: bool,
     git_rx: Option<Receiver<GitMsg>>,
+    dbbuild_rx: Option<Receiver<std::result::Result<String, String>>>,
     /// Paths the current mod list was scanned from; Save is refused if settings moved away.
     loaded_paths: Option<ScanPaths>,
     pending_git: Vec<GitJob>,
@@ -198,7 +200,8 @@ impl Session {
             workshop_rx: None,
             steamcmd_rx: None,
             pending_steamcmd: Vec::new(),
-            pending_activate: HashSet::new(),
+            pending_activate: Vec::new(),
+            dbbuild_rx: None,
             pending_path_activate: HashSet::new(),
             github_rx: None,
             pending_github: Vec::new(),
@@ -229,6 +232,7 @@ impl Session {
             || self.steamcmd_rx.is_some()
             || self.github_rx.is_some()
             || self.git_rx.is_some()
+            || self.dbbuild_rx.is_some()
     }
 
     pub fn steamcmd_running(&self) -> bool {
@@ -248,6 +252,7 @@ impl Session {
         self.poll_steamcmd();
         self.poll_github(&mut events);
         self.poll_git(&mut events);
+        self.poll_dbbuild();
         events
     }
 
@@ -819,6 +824,46 @@ impl Session {
         }
     }
 
+    /// Merge installed Workshop mods into steamDB.json in the background (`rimtui build-db`),
+    /// fetching Steam "required items" as dependencies when an API key is set.
+    pub fn build_db(&mut self) {
+        if self.dbbuild_rx.is_some() {
+            self.status = "Already building the Steam DB".into();
+            return;
+        }
+        let Some(out) = Settings::steam_db_path() else {
+            self.status = "Could not determine config directory for the Steam DB".into();
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        let settings = self.settings.clone();
+        match std::thread::Builder::new()
+            .name("rimtui-dbbuild".into())
+            .spawn(move || {
+                let result = crate::dbbuild::build_db_file(&settings, &out, true);
+                let _ = tx.send(result.map_err(|e| e.to_string()));
+            }) {
+            Ok(_) => {
+                self.dbbuild_rx = Some(rx);
+                self.status = "Building Steam DB from installed mods...".into();
+            }
+            Err(e) => self.status = format!("Could not start DB build thread: {e}"),
+        }
+    }
+
+    fn poll_dbbuild(&mut self) {
+        let Some(result) = try_take(&self.dbbuild_rx) else {
+            return;
+        };
+        self.dbbuild_rx = None;
+        match result {
+            // The scan reloads steamDB.json, so the new entries take effect.
+            Ok(Ok(summary)) => self.rescan_then(format!("Steam DB built: {summary}")),
+            Ok(Err(e)) => self.status = format!("Steam DB build failed: {e}"),
+            Err(()) => self.status = "Steam DB build ended unexpectedly".into(),
+        }
+    }
+
     // ---- workshop + SteamCMD ----------------------------------------------
 
     pub fn search_workshop(&mut self, query: &str) {
@@ -969,7 +1014,9 @@ impl Session {
 
     fn enqueue_steamcmd(&mut self, items: Vec<SteamcmdItem>) {
         for item in items.iter().filter(|i| i.activate) {
-            self.pending_activate.insert(item.published_file_id.clone());
+            if !self.pending_activate.contains(&item.published_file_id) {
+                self.pending_activate.push(item.published_file_id.clone());
+            }
         }
         if self.steamcmd_running() {
             self.pending_steamcmd.extend(items);
@@ -1011,7 +1058,7 @@ impl Session {
                         .iter()
                         .any(|i| &i.published_file_id == id);
                     if !retry_queued {
-                        self.pending_activate.remove(id);
+                        self.pending_activate.retain(|p| p != id);
                     }
                 }
                 self.steamcmd_succeeded |= report.any_success();
@@ -1042,9 +1089,7 @@ impl Session {
                 .find(|m| m.published_file_id.as_deref() == Some(id.as_str()))
             {
                 Some(m) => targets.push(m.path.clone()),
-                None => {
-                    self.pending_activate.insert(id);
-                }
+                None => self.pending_activate.push(id),
             }
         }
         let paths = std::mem::take(&mut self.pending_path_activate);
@@ -1670,6 +1715,25 @@ mod tests {
         assert_eq!(s.active_paths.last(), Some(&path));
         assert!(s.dirty);
         assert!(s.status.contains("activated 1, downloading 0"));
+    }
+
+    #[test]
+    fn downloaded_items_activate_in_request_order() {
+        let mut s = fixture_session();
+        let idx: Vec<usize> = (0..s.mods.len())
+            .filter(|&i| s.mods[i].source != ModSource::Dlc)
+            .take(2)
+            .collect();
+        let mut paths = Vec::new();
+        for (&i, id) in idx.iter().zip(["2", "1"]) {
+            s.mods[i].published_file_id = Some(id.into());
+            let p = s.mods[i].path.clone();
+            s.set_active(&p, false);
+            paths.push(p);
+        }
+        s.pending_activate = vec!["2".into(), "1".into()];
+        assert_eq!(s.activate_pending(), 2);
+        assert_eq!(s.active_paths[s.active_paths.len() - 2..], paths[..]);
     }
 
     #[test]

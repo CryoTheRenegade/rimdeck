@@ -12,7 +12,7 @@ Core + TUI: usable sorter plus community/user rules, Steam DB, HTTP fetch of dat
 
 GUI: RimSort-style main window (mod info with preview, inactive/active lists with search, double-click to toggle, reorder, sort + sort mode, save, clear, refresh, import/export lists, run game, DB download, issues panel) plus Workshop, GitHub, Git, and Settings tabs.
 
-Both frontends also have: a per-mod rule editor (user loadAfter/loadBefore/loadTop/loadBottom in `userRules.json`), duplicate-install and game-version warnings, Steam Workshop collection import, and instances (named sets of game/mods/workshop/config paths, picked with the Instance setting).
+Both frontends also have: a per-mod rule editor (user loadAfter/loadBefore/loadTop/loadBottom in `userRules.json`), duplicate-install and game-version warnings, Steam Workshop collection import, and instances (named sets of game/mods/workshop/config paths, picked with the Instance setting: a new name creates one, an existing name switches, `-name` deletes).
 
 `rimtui build-db [--out PATH] [--no-deps]` merges installed mods into `steamDB.json` (with a Steam WebAPI key it also fetches Workshop "required items" as dependencies).
 
@@ -38,6 +38,8 @@ cargo test --workspace
 
 Click a mod to see its info; double-click (or Activate/Deactivate) to move it between lists. ▲/▼ move the selected active mod. Names in the active list turn red/yellow when they have errors/warnings.
 
+Keyboard: ↑/↓ select, Ctrl+↑/↓ move the selected active mod, Enter activates/deactivates, Ctrl+S saves. Enter in a search box selects the first match. Build DB adds installed Workshop mods to `steamDB.json`.
+
 ## TUI keybindings
 
 | Key | Action |
@@ -54,6 +56,7 @@ Click a mod to see its info; double-click (or Activate/Deactivate) to move it be
 | `e` | Export a ModsConfig-shaped XML list |
 | `g` | Launch RimWorld (`RimWorldWin64.exe`, else `steam://run/294100`) |
 | `d` | Download/update community rules and Steam DB from configured URLs |
+| `D` | Build DB: merge installed Workshop mods into `steamDB.json` |
 | `n` | Workshop search (Steam WebAPI; key in settings or `STEAM_WEB_API_KEY`) |
 | `h` | GitHub release mods (install from URL, check/update, auto-update) |
 | `G` | Git updater (clone/pull HEAD from any git host; needs `git` on PATH) |

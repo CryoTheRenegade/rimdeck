@@ -284,6 +284,12 @@ impl Settings {
         self.instance = name.to_string();
     }
 
+    /// Forget a saved instance (not the active one; switch away first).
+    pub fn remove_instance(&mut self, name: &str) {
+        let name = name.trim();
+        self.instances.retain(|i| i.name != name);
+    }
+
     pub fn mods_config_path(&self) -> PathBuf {
         crate::xml::mods_config::mods_config_path(&self.config_dir)
     }
@@ -335,7 +341,10 @@ impl Settings {
     pub fn set_text_field(&mut self, field: SettingsField, value: &str) {
         let value = value.trim();
         match field {
-            SettingsField::Instance => self.switch_instance(value),
+            SettingsField::Instance => match value.strip_prefix('-') {
+                Some(name) => self.remove_instance(name),
+                None => self.switch_instance(value),
+            },
             SettingsField::GameInstall => {
                 self.game_install = PathBuf::from(value);
                 if self.local_mods.as_os_str().is_empty() {
@@ -486,6 +495,10 @@ mod tests {
         let round: Settings = toml::from_str(&toml::to_string_pretty(&s).unwrap()).unwrap();
         assert_eq!(round.instances, s.instances);
         assert!(s.field_display(SettingsField::Instance).contains("others: Default"));
+        s.set_text_field(SettingsField::Instance, "-Modded");
+        assert_eq!(s.instance_name(), "Modded", "the active instance is not removed");
+        s.set_text_field(SettingsField::Instance, "- Default");
+        assert!(s.instances.is_empty());
     }
 
     #[test]

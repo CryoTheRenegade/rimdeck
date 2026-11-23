@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use iced::keyboard::{self, key::Named, Key};
+use iced::widget::operation::{self, RelativeOffset};
 use iced::widget::{
     button, column, container, image, mouse_area, pick_list, row, rule, scrollable, space, text,
     text_input,
@@ -22,6 +24,8 @@ use rimtui_core::settings::{Settings, SettingsField, SortMode};
 const ERROR_COLOR: Color = Color::from_rgb(0.95, 0.35, 0.35);
 const WARN_COLOR: Color = Color::from_rgb(0.95, 0.8, 0.3);
 const DIM_COLOR: Color = Color::from_rgb(0.6, 0.6, 0.6);
+const INACTIVE_LIST: &str = "inactive-list";
+const ACTIVE_LIST: &str = "active-list";
 
 fn main() -> iced::Result {
     session::init_tracing();
@@ -72,9 +76,42 @@ struct Gui {
     rule_input: String,
 }
 
+/// Keyboard shortcuts on the Mods tab.
+#[derive(Debug, Clone, Copy)]
+enum KeyCmd {
+    /// Up/Down: select the previous/next mod in the selected mod's list.
+    Step(isize),
+    /// Ctrl+Up/Down: move the selected active mod.
+    Move(isize),
+    /// Enter: activate or deactivate the selected mod.
+    Toggle,
+    /// Ctrl+S: save ModsConfig.xml.
+    Save,
+}
+
+fn key_cmd(event: keyboard::Event) -> Option<KeyCmd> {
+    let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
+        return None;
+    };
+    let ctrl = modifiers.command();
+    match key.as_ref() {
+        Key::Named(Named::ArrowUp) if ctrl => Some(KeyCmd::Move(-1)),
+        Key::Named(Named::ArrowDown) if ctrl => Some(KeyCmd::Move(1)),
+        Key::Named(Named::ArrowUp) => Some(KeyCmd::Step(-1)),
+        Key::Named(Named::ArrowDown) => Some(KeyCmd::Step(1)),
+        Key::Named(Named::Enter) => Some(KeyCmd::Toggle),
+        Key::Character("s") if ctrl => Some(KeyCmd::Save),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Message {
     Tick,
+    Key(KeyCmd),
+    /// Enter in a mod search box: select the first match (`true` = active list).
+    SearchSubmit(bool),
+    BuildDb,
     Select(PathBuf),
     Toggle(PathBuf),
     InactiveSearch(String),
@@ -161,10 +198,15 @@ impl Gui {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        // Only keys no widget used (a focused text box keeps its own Enter/arrows).
+        let keys = keyboard::listen().filter_map(|e| key_cmd(e).map(Message::Key));
         if self.session.is_busy() {
-            iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+            Subscription::batch([
+                keys,
+                iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
+            ])
         } else {
-            Subscription::none()
+            keys
         }
     }
 
@@ -195,11 +237,90 @@ impl Gui {
                     .save_file(),
                 |f| Message::ExportPicked(f.map(|f| f.path().to_path_buf())),
             ),
+            Message::Key(cmd) => {
+                if self.view != View::Mods {
+                    return Task::none();
+                }
+                match cmd {
+                    KeyCmd::Step(delta) => self.step(delta),
+                    KeyCmd::Move(delta) => self.apply(Message::MoveSelected(delta)),
+                    KeyCmd::Toggle => {
+                        if let Some(p) = self.selected.clone() {
+                            self.apply(Message::Toggle(p));
+                        }
+                    }
+                    KeyCmd::Save => self.apply(Message::Save),
+                }
+                self.reveal()
+            }
+            Message::SearchSubmit(active) => {
+                let first = self.visible(active).into_iter().next();
+                if let Some(p) = first {
+                    self.select(p);
+                }
+                self.reveal()
+            }
             other => {
+                let reveal = matches!(other, Message::MoveSelected(_));
                 self.apply(other);
-                Task::none()
+                if reveal {
+                    self.reveal()
+                } else {
+                    Task::none()
+                }
             }
         }
+    }
+
+    /// The filtered inactive (`false`) or active (`true`) list as shown.
+    fn visible(&self, active: bool) -> Vec<PathBuf> {
+        let s = &self.session;
+        if active {
+            s.filtered_active(&self.active_search)
+        } else {
+            s.filtered_inactive(&self.inactive_search)
+        }
+    }
+
+    /// Select the mod `delta` rows away in the selected mod's list (first active mod if none).
+    fn step(&mut self, delta: isize) {
+        let current = self.selected.as_ref().and_then(|p| {
+            [false, true].into_iter().find_map(|active| {
+                let list = self.visible(active);
+                let i = list.iter().position(|x| x == p)?;
+                Some((list, i))
+            })
+        });
+        let next = match current {
+            Some((list, i)) => {
+                let j = (i as isize + delta).clamp(0, list.len() as isize - 1) as usize;
+                list.into_iter().nth(j)
+            }
+            None => self
+                .visible(true)
+                .into_iter()
+                .next()
+                .or_else(|| self.visible(false).into_iter().next()),
+        };
+        if let Some(p) = next {
+            self.select(p);
+        }
+    }
+
+    /// Scroll the list holding the selected mod so the selection is in view.
+    fn reveal(&self) -> Task<Message> {
+        let Some(p) = &self.selected else {
+            return Task::none();
+        };
+        for (active, id) in [(false, INACTIVE_LIST), (true, ACTIVE_LIST)] {
+            let list = self.visible(active);
+            if let Some(i) = list.iter().position(|x| x == p) {
+                // Snapping to index/(len-1) keeps that row inside the viewport for any row height.
+                let y = i as f32 / list.len().saturating_sub(1).max(1) as f32;
+                return operation::snap_to(id, RelativeOffset { x: None, y: Some(y) });
+            }
+        }
+        Task::none()
     }
 
     fn apply(&mut self, message: Message) {
@@ -208,6 +329,8 @@ impl Gui {
         }
         let s = &mut self.session;
         match message {
+            Message::Key(_) | Message::SearchSubmit(_) => {} // handled in `update`
+            Message::BuildDb => s.build_db(),
             Message::Tick => {
                 for ev in s.poll() {
                     match ev {
@@ -388,6 +511,9 @@ impl Gui {
             button("Download DBs")
                 .on_press(Message::FetchDbs)
                 .style(button::secondary),
+            button("Build DB")
+                .on_press(Message::BuildDb)
+                .style(button::secondary),
             button("Run game").on_press(Message::Launch),
         ]
         .spacing(8)
@@ -448,8 +574,13 @@ impl Gui {
             header,
             text_input("Search name, packageId, author…", query)
                 .on_input(on_search)
+                .on_submit(Message::SearchSubmit(active))
                 .padding(6),
-            container(scrollable(column(rows).spacing(1)).height(Length::Fill))
+            container(
+                scrollable(column(rows).spacing(1))
+                    .id(if active { ACTIVE_LIST } else { INACTIVE_LIST })
+                    .height(Length::Fill)
+            )
                 .style(container::bordered_box)
                 .padding(2)
                 .height(Length::Fill),
@@ -621,6 +752,7 @@ impl Gui {
             row![
                 text_input("another mod's packageId", &self.rule_input)
                     .on_input(Message::RuleInput)
+                    .on_submit(Message::RuleAdd { before: false })
                     .padding(4)
                     .size(13),
                 button("Load after")
@@ -690,7 +822,14 @@ impl Gui {
 
     fn settings_view(&self) -> Element<'_, Message> {
         let s = &self.session;
-        let mut form = column![text("Settings").size(22)].spacing(10).padding(16);
+        let mut form = column![
+            text("Settings").size(22),
+            text("Instance: a new name creates one, an existing name switches, -name deletes")
+                .size(12)
+                .color(DIM_COLOR),
+        ]
+        .spacing(10)
+        .padding(16);
         if !s.settings.game_install_ok() {
             form = form.push(
                 text("Game install does not look like a RimWorld folder yet.").color(WARN_COLOR),

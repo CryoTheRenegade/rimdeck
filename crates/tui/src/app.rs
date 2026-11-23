@@ -986,6 +986,7 @@ impl App {
             KeyCode::Char('R') => self.start_rule_prompt(),
             KeyCode::Char('b') => self.toggle_user_load_bottom(),
             KeyCode::Char('d') => self.start_fetch(false),
+            KeyCode::Char('D') => self.build_db(),
             KeyCode::Char('n') => self.open_workshop_search(),
             KeyCode::Char('h') => self.open_github(),
             KeyCode::Char('G') => self.open_git(),
