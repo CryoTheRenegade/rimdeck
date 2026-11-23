@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>Harmony</name>
+  <author>Brrainz</author>
+  <packageId>brrainz.harmony</packageId>
+  <description>Mod loader</description>
+  <supportedVersions>
+    <li>1.5</li>
+  </supportedVersions>
+</ModMetaData>

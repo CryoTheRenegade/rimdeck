@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>Workshop Mod</name>
+  <author>WorkshopAuthor</author>
+  <packageId>author.workshopmod</packageId>
+  <description>From Steam Workshop</description>
+  <supportedVersions>
+    <li>1.5</li>
+  </supportedVersions>
+</ModMetaData>

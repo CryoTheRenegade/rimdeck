@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>Patch Mod</name>
+  <author>Author</author>
+  <packageId>author.patchmod</packageId>
+  <description>Loads after Harmony</description>
+  <supportedVersions>
+    <li>1.5</li>
+  </supportedVersions>
+  <loadAfter>
+    <li>brrainz.harmony</li>
+  </loadAfter>
+  <modDependencies>
+    <li>
+      <packageId>brrainz.harmony</packageId>
+      <displayName>Harmony</displayName>
+    </li>
+  </modDependencies>
+</ModMetaData>

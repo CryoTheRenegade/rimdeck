@@ -1,0 +1,16 @@
+[package]
+name = "rimtui"
+description = "A RimWorld mod manager TUI inspired by RimSort"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rimtui-core.workspace = true
+anyhow.workspace = true
+crossterm = "0.28"
+image.workspace = true
+ratatui = "0.29"
+ratatui-image = "3.0"
+tracing.workspace = true

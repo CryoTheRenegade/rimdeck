@@ -1,0 +1,530 @@
+//! rimtui-gui — RimWorld mod manager GUI (GPL-3.0-only), built on the shared rimtui core.
+//!
+//! Inspired by RimSort (https://github.com/RimSort/RimSort).
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use iced::widget::{
+    button, column, container, image, mouse_area, pick_list, row, rule, scrollable, space, text,
+    text_input,
+};
+use iced::{Color, Element, Length, Subscription, Task, Theme};
+
+use rimtui_core::issues::Severity;
+use rimtui_core::model::{Mod, ModSource};
+use rimtui_core::session::{self, Session};
+use rimtui_core::settings::{Settings, SettingsField, SortMode};
+
+const ERROR_COLOR: Color = Color::from_rgb(0.95, 0.35, 0.35);
+const WARN_COLOR: Color = Color::from_rgb(0.95, 0.8, 0.3);
+const DIM_COLOR: Color = Color::from_rgb(0.6, 0.6, 0.6);
+
+fn main() -> iced::Result {
+    session::init_tracing();
+    iced::application(Gui::boot, Gui::update, Gui::view)
+        .title(Gui::title)
+        .subscription(Gui::subscription)
+        .theme(|_: &Gui| Theme::Dark)
+        .window_size((1400.0, 860.0))
+        .run()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum View {
+    Main,
+    Settings,
+}
+
+struct Gui {
+    session: Session,
+    view: View,
+    selected: Option<PathBuf>,
+    inactive_search: String,
+    active_search: String,
+    /// Text being edited on the settings page, one per `SettingsField`.
+    settings_draft: HashMap<SettingsField, String>,
+    previews: HashMap<PathBuf, Option<image::Handle>>,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    Tick,
+    Select(PathBuf),
+    Toggle(PathBuf),
+    InactiveSearch(String),
+    ActiveSearch(String),
+    MoveSelected(isize),
+    Sort,
+    SortMode(SortMode),
+    Save,
+    Refresh,
+    Clear,
+    Launch,
+    FetchDbs,
+    UpdateSelected,
+    ToggleLoadTop,
+    ToggleLoadBottom,
+    OpenSettings,
+    CloseSettings,
+    SettingsEdit(SettingsField, String),
+    SaveSettings,
+}
+
+impl Gui {
+    fn boot() -> (Self, Task<Message>) {
+        let settings = Settings::load().unwrap_or_else(|e| {
+            tracing::warn!("settings load failed: {e}");
+            Settings::default().with_autodetect()
+        });
+        let mut session = Session::new(settings);
+        let view = if session.start() {
+            View::Main
+        } else {
+            View::Settings
+        };
+        let mut gui = Self {
+            session,
+            view: View::Main,
+            selected: None,
+            inactive_search: String::new(),
+            active_search: String::new(),
+            settings_draft: HashMap::new(),
+            previews: HashMap::new(),
+        };
+        if view == View::Settings {
+            gui.open_settings();
+        }
+        (gui, Task::none())
+    }
+
+    fn title(&self) -> String {
+        let dirty = if self.session.dirty { " *" } else { "" };
+        format!("rimtui{dirty}")
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        if self.session.is_busy() {
+            iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+        } else {
+            Subscription::none()
+        }
+    }
+
+    fn open_settings(&mut self) {
+        let s = &self.session.settings;
+        self.settings_draft = SettingsField::ALL
+            .iter()
+            .filter(|f| !f.is_cycle())
+            .map(|&f| (f, s.field_edit_value(f)))
+            .collect();
+        self.view = View::Settings;
+    }
+
+    fn update(&mut self, message: Message) {
+        let s = &mut self.session;
+        match message {
+            Message::Tick => {
+                if s.poll().contains(&session::Event::Reloaded) {
+                    self.previews.clear();
+                    if let Some(p) = self.selected.take() {
+                        if self.session.mod_ref(&p).is_some() {
+                            self.select(p);
+                        }
+                    }
+                }
+            }
+            Message::Select(p) => self.select(p),
+            Message::Toggle(p) => {
+                s.toggle(&p);
+                self.select(p);
+            }
+            Message::InactiveSearch(q) => self.inactive_search = q,
+            Message::ActiveSearch(q) => self.active_search = q,
+            Message::MoveSelected(delta) => {
+                if let Some(p) = &self.selected {
+                    s.move_active(p, delta);
+                }
+            }
+            Message::Sort => s.sort(),
+            Message::SortMode(mode) => s.set_sort_mode(mode),
+            Message::Save => s.save_mods_config(),
+            Message::Refresh => s.reload(),
+            Message::Clear => s.clear_active(),
+            Message::Launch => s.launch(),
+            Message::FetchDbs => s.start_fetch(false),
+            Message::UpdateSelected => {
+                if let Some(p) = &self.selected {
+                    s.update_mod(p);
+                }
+            }
+            Message::ToggleLoadTop | Message::ToggleLoadBottom => {
+                let Some(pid) = self
+                    .selected
+                    .as_ref()
+                    .and_then(|p| s.mod_ref(p))
+                    .map(|m| m.package_id.clone())
+                else {
+                    return;
+                };
+                if matches!(message, Message::ToggleLoadTop) {
+                    s.toggle_user_load_top(&pid);
+                } else {
+                    s.toggle_user_load_bottom(&pid);
+                }
+            }
+            Message::OpenSettings => self.open_settings(),
+            Message::CloseSettings => self.view = View::Main,
+            Message::SettingsEdit(field, value) => {
+                self.settings_draft.insert(field, value);
+            }
+            Message::SaveSettings => {
+                // Only edited fields, decided before any setter runs: setting Game install fills a
+                // blank Local mods, which an unchanged blank draft must not then clear.
+                let edited: Vec<(SettingsField, String)> = self
+                    .settings_draft
+                    .iter()
+                    .filter(|(&f, v)| **v != s.settings.field_edit_value(f))
+                    .map(|(&f, v)| (f, v.clone()))
+                    .collect();
+                for (field, value) in edited {
+                    s.settings.set_text_field(field, &value);
+                }
+                if s.save_settings() {
+                    self.view = View::Main;
+                }
+            }
+        }
+    }
+
+    fn view(&self) -> Element<'_, Message> {
+        let body = match self.view {
+            View::Main => self.main_view(),
+            View::Settings => self.settings_view(),
+        };
+        column![body, self.status_bar()].into()
+    }
+
+    // ---- main window ------------------------------------------------------
+
+    fn main_view(&self) -> Element<'_, Message> {
+        let s = &self.session;
+        let toolbar = row![
+            button("Refresh").on_press(Message::Refresh),
+            button("Sort").on_press(Message::Sort),
+            pick_list(&SortMode::ALL[..], Some(s.settings.sort_mode), Message::SortMode),
+            button("Save").on_press(Message::Save).style(if s.dirty {
+                button::success
+            } else {
+                button::primary
+            }),
+            button("Clear").on_press(Message::Clear).style(button::secondary),
+            space::horizontal(),
+            button("Download DBs")
+                .on_press(Message::FetchDbs)
+                .style(button::secondary),
+            button("Settings")
+                .on_press(Message::OpenSettings)
+                .style(button::secondary),
+            button("Run game").on_press(Message::Launch),
+        ]
+        .spacing(8)
+        .padding(8);
+
+        let inactive = s.filtered_inactive(&self.inactive_search);
+        let active = s.filtered_active(&self.active_search);
+        let lists = row![
+            container(self.info_panel()).width(Length::FillPortion(3)),
+            self.mod_list(
+                format!("Inactive ({})", s.inactive_paths.len()),
+                &self.inactive_search,
+                Message::InactiveSearch,
+                &inactive,
+                false,
+            ),
+            self.mod_list(
+                format!("Active ({})", s.active_paths.len()),
+                &self.active_search,
+                Message::ActiveSearch,
+                &active,
+                true,
+            ),
+        ]
+        .spacing(8)
+        .padding([0, 8])
+        .height(Length::FillPortion(4));
+
+        column![
+            toolbar,
+            lists,
+            rule::horizontal(1),
+            self.issues_panel().height(Length::FillPortion(1)),
+        ]
+        .height(Length::Fill)
+        .into()
+    }
+
+    fn mod_list<'a>(
+        &'a self,
+        title: String,
+        query: &'a str,
+        on_search: fn(String) -> Message,
+        paths: &[PathBuf],
+        active: bool,
+    ) -> Element<'a, Message> {
+        let rows = paths.iter().filter_map(|p| {
+            let m = self.session.mod_ref(p)?;
+            Some(self.mod_row(m, active))
+        });
+        let mut header = row![text(title).size(16), space::horizontal()].spacing(4);
+        if active {
+            header = header
+                .push(button("▲").on_press(Message::MoveSelected(-1)).padding([2, 8]))
+                .push(button("▼").on_press(Message::MoveSelected(1)).padding([2, 8]));
+        }
+        column![
+            header,
+            text_input("Search name, packageId, author…", query)
+                .on_input(on_search)
+                .padding(6),
+            container(scrollable(column(rows).spacing(1)).height(Length::Fill))
+                .style(container::bordered_box)
+                .padding(2)
+                .height(Length::Fill),
+        ]
+        .spacing(6)
+        .width(Length::FillPortion(3))
+        .into()
+    }
+
+    fn mod_row<'a>(&'a self, m: &'a Mod, active: bool) -> Element<'a, Message> {
+        let selected = self.selected.as_deref() == Some(m.path.as_path());
+        let severity = active
+            .then(|| self.worst_issue(&m.package_id))
+            .flatten();
+        let name_color = match severity {
+            Some(Severity::Error) => Some(ERROR_COLOR),
+            Some(Severity::Warning) => Some(WARN_COLOR),
+            None => None,
+        };
+        let label = row![
+            text(source_tag(m.source)).size(11).color(DIM_COLOR).width(28),
+            text(&m.name).size(14).color_maybe(name_color),
+        ]
+        .spacing(6);
+        // Not a button: a button captures the press, so MouseArea would never see the double-click.
+        let row_box = container(label)
+            .width(Length::Fill)
+            .padding([3, 6])
+            .style(if selected {
+                container::primary
+            } else {
+                container::transparent
+            });
+        mouse_area(row_box)
+            .interaction(iced::mouse::Interaction::Pointer)
+            .on_press(Message::Select(m.path.clone()))
+            .on_double_click(Message::Toggle(m.path.clone()))
+            .into()
+    }
+
+    fn worst_issue(&self, package_id: &str) -> Option<Severity> {
+        let mut worst = None;
+        for issue in self.session.issues.iter().filter(|i| i.package_id == package_id) {
+            if issue.severity == Severity::Error {
+                return Some(Severity::Error);
+            }
+            worst = Some(issue.severity);
+        }
+        worst
+    }
+
+    fn info_panel(&self) -> Element<'_, Message> {
+        let s = &self.session;
+        let Some(m) = self.selected.as_ref().and_then(|p| s.mod_ref(p)) else {
+            return container(text("Select a mod. Double-click to activate or deactivate.").color(DIM_COLOR))
+                .padding(12)
+                .style(container::bordered_box)
+                .height(Length::Fill)
+                .width(Length::Fill)
+                .into();
+        };
+        let mut col = column![].spacing(6).padding(12);
+        if let Some(handle) = self.preview(m) {
+            col = col.push(image(handle).width(Length::Fill).height(200));
+        }
+        col = col
+            .push(text(&m.name).size(20))
+            .push(field("Author", m.author_line()))
+            .push(field("Package ID", m.package_id.clone()))
+            .push(field("Source", m.source.label().to_string()))
+            .push(field("Path", m.path.display().to_string()));
+        if !m.mod_version.is_empty() {
+            col = col.push(field("Version", m.mod_version.clone()));
+        }
+        if !m.supported_versions.is_empty() {
+            col = col.push(field("Supports", m.supported_versions.join(", ")));
+        }
+        if let Some(pfid) = &m.published_file_id {
+            col = col.push(field("Workshop ID", pfid.clone()));
+        }
+        if !m.dependencies.is_empty() {
+            let deps = m
+                .dependencies
+                .iter()
+                .map(|d| d.display_name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            col = col.push(field("Requires", deps));
+        }
+        let mut flags = Vec::new();
+        if m.load_first {
+            flags.push("loadTop");
+        }
+        if m.load_last {
+            flags.push("loadBottom");
+        }
+        if !flags.is_empty() {
+            col = col.push(field("Rules", flags.join(", ")));
+        }
+        let is_active = s.is_active(&m.path);
+        col = col.push(
+            row![
+                button(if is_active { "Deactivate" } else { "Activate" })
+                    .on_press(Message::Toggle(m.path.clone())),
+                button("Update")
+                    .on_press(Message::UpdateSelected)
+                    .style(button::secondary),
+                button(if s.user_rules.load_top(&m.package_id) {
+                    "Unset loadTop"
+                } else {
+                    "loadTop"
+                })
+                .on_press(Message::ToggleLoadTop)
+                .style(button::secondary),
+                button(if s.user_rules.load_bottom(&m.package_id) {
+                    "Unset loadBottom"
+                } else {
+                    "loadBottom"
+                })
+                .on_press(Message::ToggleLoadBottom)
+                .style(button::secondary),
+            ]
+            .spacing(6)
+            .wrap(),
+        );
+        col = col.push(rule::horizontal(1)).push(text(&m.description).size(13));
+        container(scrollable(col))
+            .style(container::bordered_box)
+            .height(Length::Fill)
+            .width(Length::Fill)
+            .into()
+    }
+
+    fn preview(&self, m: &Mod) -> Option<image::Handle> {
+        self.previews.get(&m.path).cloned().flatten()
+    }
+
+    /// Select a mod and cache its preview handle (stable handles avoid re-decoding).
+    fn select(&mut self, p: PathBuf) {
+        if let Some(m) = self.session.mod_ref(&p) {
+            let handle = m.preview_path().map(image::Handle::from_path);
+            self.previews.entry(p.clone()).or_insert(handle);
+        }
+        self.selected = Some(p);
+    }
+
+    fn issues_panel(&self) -> iced::widget::Container<'_, Message> {
+        let s = &self.session;
+        let errors = s.issues.iter().filter(|i| i.severity == Severity::Error).count();
+        let warnings = s.issues.len() - errors;
+        let lines = s.issues.iter().map(|i| {
+            let (tag, color) = match i.severity {
+                Severity::Error => ("error", ERROR_COLOR),
+                Severity::Warning => ("warn", WARN_COLOR),
+            };
+            row![
+                text(tag).color(color).size(13).width(44),
+                text(&i.message).size(13),
+            ]
+            .spacing(6)
+            .into()
+        });
+        container(
+            column![
+                text(format!("Issues — {errors} error(s), {warnings} warning(s)")).size(15),
+                scrollable(column(lines).spacing(2)).height(Length::Fill),
+            ]
+            .spacing(4),
+        )
+        .padding([4, 8])
+        .width(Length::Fill)
+    }
+
+    fn status_bar(&self) -> Element<'_, Message> {
+        let s = &self.session;
+        let busy = if s.is_busy() { "⏳ " } else { "" };
+        let dirty = if s.dirty { "  •  unsaved changes" } else { "" };
+        container(text(format!("{busy}{}{dirty}", s.status)).size(13))
+            .padding([4, 8])
+            .width(Length::Fill)
+            .style(container::dark)
+            .into()
+    }
+
+    // ---- settings ---------------------------------------------------------
+
+    fn settings_view(&self) -> Element<'_, Message> {
+        let s = &self.session;
+        let mut form = column![text("Settings").size(22)].spacing(10).padding(16);
+        if !s.settings.game_install_ok() {
+            form = form.push(
+                text("Game install does not look like a RimWorld folder yet.").color(WARN_COLOR),
+            );
+        }
+        // Sort mode is on the main toolbar and saves immediately, so it is not a draft field here.
+        for &f in SettingsField::ALL.iter().filter(|f| !f.is_cycle()) {
+            let value = self.settings_draft.get(&f).map(String::as_str).unwrap_or("");
+            let mut input = text_input(f.label(), value)
+                .on_input(move |v| Message::SettingsEdit(f, v))
+                .on_submit(Message::SaveSettings)
+                .padding(6);
+            if matches!(f, SettingsField::SteamApiKey | SettingsField::GithubToken) {
+                input = input.secure(true);
+            }
+            form = form.push(
+                row![text(f.label()).width(140), input]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center),
+            );
+        }
+        let mut actions = row![button("Save").on_press(Message::SaveSettings)].spacing(8);
+        if s.settings.game_install_ok() {
+            actions = actions.push(
+                button("Cancel")
+                    .on_press(Message::CloseSettings)
+                    .style(button::secondary),
+            );
+        }
+        form = form.push(actions);
+        if let Some(p) = Settings::config_file_path() {
+            form = form.push(text(format!("Stored in {}", p.display())).size(12).color(DIM_COLOR));
+        }
+        scrollable(form).height(Length::Fill).into()
+    }
+}
+
+fn field<'a>(label: &'a str, value: String) -> Element<'a, Message> {
+    row![text(label).size(13).color(DIM_COLOR).width(90), text(value).size(13)]
+        .spacing(6)
+        .into()
+}
+
+fn source_tag(source: ModSource) -> &'static str {
+    match source {
+        ModSource::Dlc => "DLC",
+        ModSource::Local => "L",
+        ModSource::Workshop => "W",
+    }
+}

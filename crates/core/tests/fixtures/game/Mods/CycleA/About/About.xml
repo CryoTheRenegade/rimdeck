@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>Cycle A</name>
+  <author>Author</author>
+  <packageId>author.cyclea</packageId>
+  <loadAfter>
+    <li>author.cycleb</li>
+  </loadAfter>
+</ModMetaData>

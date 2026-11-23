@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>Core</name>
+  <author>Ludeon Studios</author>
+  <packageId>Ludeon.RimWorld</packageId>
+  <description>Base game</description>
+  <supportedVersions>
+    <li>1.5</li>
+  </supportedVersions>
+</ModMetaData>

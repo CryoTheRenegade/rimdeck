@@ -1,0 +1,21 @@
+[package]
+name = "rimtui-core"
+description = "Shared RimWorld mod-manager logic (scan, sort, rules, Steam, GitHub, git) for rimtui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+directories = "6"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+roxmltree = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
