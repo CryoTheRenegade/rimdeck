@@ -294,7 +294,11 @@ impl Gui {
                     .filter(|(&f, v)| **v != s.settings.field_edit_value(f))
                     .map(|(&f, v)| (f, v.clone()))
                     .collect();
-                for (field, value) in edited {
+                // Switch instance first so path edits in the same save apply to the new one.
+                let (instance, rest): (Vec<_>, Vec<_>) = edited
+                    .into_iter()
+                    .partition(|(f, _)| *f == SettingsField::Instance);
+                for (field, value) in instance.into_iter().chain(rest) {
                     s.settings.set_text_field(field, &value);
                 }
                 if s.save_settings() {

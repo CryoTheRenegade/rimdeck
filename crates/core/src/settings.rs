@@ -68,6 +68,21 @@ pub struct Settings {
     /// GitHub token for release API. Prefer env `GITHUB_TOKEN` if empty.
     #[serde(default)]
     pub github_token: String,
+    /// Name of the active instance; its paths are the top-level fields above.
+    #[serde(default)]
+    pub instance: String,
+    /// Saved path sets for the other instances (RimSort "instances").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<Instance>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Instance {
+    pub name: String,
+    pub game_install: PathBuf,
+    pub local_mods: PathBuf,
+    pub workshop: PathBuf,
+    pub config_dir: PathBuf,
 }
 
 fn default_community_rules_url() -> String {
@@ -91,6 +106,8 @@ impl Default for Settings {
             steamcmd_path: PathBuf::new(),
             steam_api_key: String::new(),
             github_token: String::new(),
+            instance: String::new(),
+            instances: Vec::new(),
         }
     }
 }
@@ -234,12 +251,50 @@ impl Settings {
         crate::paths::is_rimworld_dir(&self.game_install)
     }
 
+    pub fn instance_name(&self) -> &str {
+        match self.instance.trim() {
+            "" => "Default",
+            name => name,
+        }
+    }
+
+    /// Store the current paths under the active name, then make `name` active: an existing
+    /// instance's paths are loaded, a new name starts as a copy of the current paths.
+    pub fn switch_instance(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() || name == self.instance_name() {
+            return;
+        }
+        let current = Instance {
+            name: self.instance_name().to_string(),
+            game_install: self.game_install.clone(),
+            local_mods: self.local_mods.clone(),
+            workshop: self.workshop.clone(),
+            config_dir: self.config_dir.clone(),
+        };
+        self.instances.retain(|i| i.name != current.name);
+        self.instances.push(current);
+        if let Some(pos) = self.instances.iter().position(|i| i.name == name) {
+            let next = self.instances.remove(pos);
+            self.game_install = next.game_install;
+            self.local_mods = next.local_mods;
+            self.workshop = next.workshop;
+            self.config_dir = next.config_dir;
+        }
+        self.instance = name.to_string();
+    }
+
     pub fn mods_config_path(&self) -> PathBuf {
         crate::xml::mods_config::mods_config_path(&self.config_dir)
     }
 
     pub fn field_display(&self, field: SettingsField) -> String {
         match field {
+            SettingsField::Instance if self.instances.is_empty() => self.instance_name().into(),
+            SettingsField::Instance => {
+                let others: Vec<&str> = self.instances.iter().map(|i| i.name.as_str()).collect();
+                format!("{} (others: {})", self.instance_name(), others.join(", "))
+            }
             SettingsField::GameInstall => self.game_install.display().to_string(),
             SettingsField::LocalMods => self.local_mods.display().to_string(),
             SettingsField::Workshop => self.workshop.display().to_string(),
@@ -280,6 +335,7 @@ impl Settings {
     pub fn set_text_field(&mut self, field: SettingsField, value: &str) {
         let value = value.trim();
         match field {
+            SettingsField::Instance => self.switch_instance(value),
             SettingsField::GameInstall => {
                 self.game_install = PathBuf::from(value);
                 if self.local_mods.as_os_str().is_empty() {
@@ -307,6 +363,7 @@ impl Settings {
     /// Raw value for the settings editor (not the masked/auto display).
     pub fn field_edit_value(&self, field: SettingsField) -> String {
         match field {
+            SettingsField::Instance => self.instance_name().to_string(),
             SettingsField::SteamCmdPath => self.steamcmd_path.display().to_string(),
             SettingsField::SteamApiKey => self.steam_api_key.clone(),
             SettingsField::GithubToken => self.github_token.clone(),
@@ -328,6 +385,7 @@ fn mask_api_key(key: &str) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SettingsField {
+    Instance,
     GameInstall,
     LocalMods,
     Workshop,
@@ -341,7 +399,8 @@ pub enum SettingsField {
 }
 
 impl SettingsField {
-    pub const ALL: [SettingsField; 10] = [
+    pub const ALL: [SettingsField; 11] = [
+        Self::Instance,
         Self::GameInstall,
         Self::LocalMods,
         Self::Workshop,
@@ -356,6 +415,7 @@ impl SettingsField {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Instance => "Instance",
             Self::GameInstall => "Game install",
             Self::LocalMods => "Local mods",
             Self::Workshop => "Workshop",
@@ -404,6 +464,28 @@ mod tests {
         assert_eq!(mask_api_key(""), "");
         assert_eq!(mask_api_key("abcd"), "****");
         assert_eq!(mask_api_key("1234567890abcdef"), "****cdef");
+    }
+
+    #[test]
+    fn instances_switch_and_restore_paths() {
+        let mut s = Settings {
+            game_install: "C:/RimA".into(),
+            config_dir: "C:/CfgA".into(),
+            ..Settings::default()
+        };
+        s.switch_instance("Modded");
+        assert_eq!(s.instance_name(), "Modded");
+        assert_eq!(s.game_install, PathBuf::from("C:/RimA"), "new instance copies paths");
+        s.game_install = "C:/RimB".into();
+        s.switch_instance("Default");
+        assert_eq!(s.game_install, PathBuf::from("C:/RimA"));
+        assert_eq!(s.config_dir, PathBuf::from("C:/CfgA"));
+        s.switch_instance("Modded");
+        assert_eq!(s.game_install, PathBuf::from("C:/RimB"));
+        assert_eq!(s.instances.len(), 1);
+        let round: Settings = toml::from_str(&toml::to_string_pretty(&s).unwrap()).unwrap();
+        assert_eq!(round.instances, s.instances);
+        assert!(s.field_display(SettingsField::Instance).contains("others: Default"));
     }
 
     #[test]
