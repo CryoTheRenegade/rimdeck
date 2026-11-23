@@ -10,7 +10,11 @@ This project is licensed under the GNU General Public License v3.0 only, the sam
 
 Core + TUI: usable sorter plus community/user rules, Steam DB, HTTP fetch of databases, list import/export, game launch, SteamCMD install/update, Steam WebAPI workshop search, GitHub release mods, and a git HEAD updater (clone/pull from GitLab, GitGud, Forgejo, GitHub, …).
 
-GUI (early): RimSort-style main window (mod info with preview, inactive/active lists with search, double-click to toggle, reorder, sort + sort mode, save, clear, refresh, run game, DB download, user loadTop/loadBottom, issues panel) and a settings page. Workshop/GitHub/git views and list import/export are TUI-only for now.
+GUI: RimSort-style main window (mod info with preview, inactive/active lists with search, double-click to toggle, reorder, sort + sort mode, save, clear, refresh, import/export lists, run game, DB download, issues panel) plus Workshop, GitHub, Git, and Settings tabs.
+
+Both frontends also have: a per-mod rule editor (user loadAfter/loadBefore/loadTop/loadBottom in `userRules.json`), duplicate-install and game-version warnings, Steam Workshop collection import, and instances (named sets of game/mods/workshop/config paths, picked with the Instance setting).
+
+`rimtui build-db [--out PATH] [--no-deps]` merges installed mods into `steamDB.json` (with a Steam WebAPI key it also fetches Workshop "required items" as dependencies).
 
 ## Layout
 
@@ -55,7 +59,8 @@ Click a mod to see its info; double-click (or Activate/Deactivate) to move it be
 | `G` | Git updater (clone/pull HEAD from any git host; needs `git` on PATH) |
 | `u` | SteamCMD, GitHub release, or git pull for the selected mod |
 | `t` / `b` | Toggle user `loadTop` / `loadBottom` for the selected mod |
-| `r` | Rescan |
+| `R` | User `loadAfter` / `loadBefore` rule for the selected mod (`a <id>`, `b <id>`, `-a`/`-b` to remove) |
+| `r` | Rescan (press twice to discard unsaved changes) |
 | `p` | Path, database, SteamCMD, Steam API key, and GitHub token settings |
 | `?` | Help |
 | `q` | Quit |
