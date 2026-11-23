@@ -46,6 +46,7 @@ pub enum Screen {
     Github,
     Git,
     Updates,
+    Packs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +72,8 @@ pub enum PathPromptKind {
     Export,
     /// `a <id>` / `b <id>` add a user loadAfter / loadBefore rule; `-a` / `-b` remove.
     Rule,
+    /// A Workshop collection URL or ID to track as a pack.
+    Pack,
 }
 
 /// Terminal frontend state. Domain state lives in `session`; `Deref` lets the drawing
@@ -112,6 +115,8 @@ pub struct App {
     pub workshop_area: Rect,
     pub updates_selected: usize,
     pub updates_state: ListState,
+    pub packs_selected: usize,
+    pub packs_state: ListState,
     /// Workshop ID armed by a first `X`; a second `X` on the same mod unsubscribes.
     confirm_unsubscribe: Option<String>,
     pub github_query: String,
@@ -196,6 +201,8 @@ impl App {
             workshop_area: Rect::default(),
             updates_selected: 0,
             updates_state: ListState::default(),
+            packs_selected: 0,
+            packs_state: ListState::default(),
             confirm_unsubscribe: None,
             github_query: String::new(),
             github_selected: 0,
@@ -452,6 +459,7 @@ impl App {
         match self.path_prompt {
             PathPromptKind::Export => self.session.export_list(Path::new(&raw)),
             PathPromptKind::Rule => self.apply_rule_command(&raw),
+            PathPromptKind::Pack => self.session.track_pack(&raw),
         }
     }
 
@@ -676,7 +684,7 @@ impl App {
                 self.screen == Screen::Workshop && self.input_mode == InputMode::Normal;
             let github = self.screen == Screen::Github && self.input_mode == InputMode::Normal;
             let git = self.screen == Screen::Git && self.input_mode == InputMode::Normal;
-            let updates = self.screen == Screen::Updates;
+            let updates = matches!(self.screen, Screen::Updates | Screen::Packs);
             if !explorer
                 && !workshop
                 && !github
@@ -727,6 +735,7 @@ impl App {
                 Screen::Github => self.handle_github_list_key(key),
                 Screen::Git => self.handle_git_list_key(key),
                 Screen::Updates => self.handle_updates_key(key),
+                Screen::Packs => self.handle_packs_key(key),
                 Screen::Main => self.handle_main_key(key),
             },
         }
@@ -1005,6 +1014,12 @@ impl App {
             KeyCode::Char('h') => self.open_github(),
             KeyCode::Char('G') => self.open_git(),
             KeyCode::Char('U') => self.open_updates(),
+            KeyCode::Char('P') => {
+                self.screen = Screen::Packs;
+                if self.session.pack_status.is_empty() && !self.session.settings.packs.is_empty() {
+                    self.session.check_packs();
+                }
+            }
             KeyCode::Char('W') => match self.selected_mod().and_then(|m| m.published_file_id.clone()) {
                 Some(id) => self.session.open_in_steam(&id),
                 None => self.session.status = "Selected mod is not from the Workshop".into(),
@@ -1179,6 +1194,51 @@ impl App {
                 format!("Press X again to unsubscribe from {name} (Steam removes its files)");
             self.confirm_unsubscribe = Some(id);
         }
+    }
+
+    fn handle_packs_key(&mut self, key: KeyEvent) {
+        let len = self.session.settings.packs.len();
+        let selected = self
+            .session
+            .settings
+            .packs
+            .get(self.packs_selected)
+            .map(|p| p.id.clone());
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                self.packs_selected = (self.packs_selected + 1) % len;
+            }
+            KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                self.packs_selected = (self.packs_selected + len - 1) % len;
+            }
+            KeyCode::Char('c') => self.session.check_packs(),
+            KeyCode::Char('A') => self.session.sync_all_packs(),
+            KeyCode::Char('t') | KeyCode::Char('/') => {
+                self.path_prompt = PathPromptKind::Pack;
+                self.edit_buffer.clear();
+                self.input_mode = InputMode::PathPrompt;
+            }
+            KeyCode::Enter | KeyCode::Char('s') => {
+                if let Some(id) = selected {
+                    self.session.sync_packs(vec![id]);
+                }
+            }
+            KeyCode::Char('o') => {
+                if let Some(id) = selected {
+                    self.session.open_in_steam(&id);
+                }
+            }
+            // Stopping tracking leaves every mod installed, so no confirmation.
+            KeyCode::Char('X') => {
+                if let Some(id) = selected {
+                    self.session.untrack_pack(&id);
+                }
+            }
+            _ => {}
+        }
+        let len = self.session.settings.packs.len();
+        clamp_list(&mut self.packs_selected, &mut self.packs_state, len);
     }
 
     fn handle_updates_key(&mut self, key: KeyEvent) {

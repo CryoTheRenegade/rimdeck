@@ -71,6 +71,16 @@ impl SteamBackend {
     }
 }
 
+/// A Workshop collection kept in sync, such as a modpack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pack {
+    pub id: String,
+    pub title: String,
+    /// The collection's items at the last sync; empty until the first one.
+    #[serde(default)]
+    pub items: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -92,6 +102,8 @@ pub struct Settings {
     pub steamcmd_path: PathBuf,
     #[serde(default)]
     pub steam_backend: SteamBackend,
+    #[serde(default)]
+    pub packs: Vec<Pack>,
     /// Steam WebAPI key for workshop search. Prefer env `STEAM_WEB_API_KEY` if empty.
     #[serde(default)]
     pub steam_api_key: String,
@@ -135,6 +147,7 @@ impl Default for Settings {
             sort_mode: SortMode::Topological,
             steamcmd_path: PathBuf::new(),
             steam_backend: SteamBackend::default(),
+            packs: Vec::new(),
             steam_api_key: String::new(),
             github_token: String::new(),
             instance: String::new(),
@@ -145,6 +158,11 @@ impl Default for Settings {
 
 impl Settings {
     pub fn config_file_path() -> Option<PathBuf> {
+        // Core tests must never write the user's real settings, rules or databases.
+        if cfg!(test) {
+            let dir = std::env::temp_dir().join(format!("rimdeck-test-config-{}", std::process::id()));
+            return Some(dir.join("settings.toml"));
+        }
         let dirs = directories::ProjectDirs::from("", "rimdeck", "rimdeck")?;
         Some(dirs.config_dir().join("settings.toml"))
     }

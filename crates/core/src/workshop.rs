@@ -84,9 +84,50 @@ pub fn spawn_collection(collection_id: String, tx: Sender<WorkshopMsg>) {
     }
 }
 
-/// GetCollectionDetails needs no API key.
+/// Every item of a collection in order, with nested collections (modpacks split into
+/// parts) expanded in place. GetCollectionDetails needs no API key.
 fn collection_items(collection_id: &str) -> Result<Vec<String>> {
-    let resp = blocking_client()?
+    let client = blocking_client()?;
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    collect_items(&client, collection_id, &mut seen, &mut out, true)?;
+    Ok(out)
+}
+
+fn collect_items(
+    client: &reqwest::blocking::Client,
+    collection_id: &str,
+    seen: &mut std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+    root: bool,
+) -> Result<()> {
+    if !seen.insert(collection_id.to_string()) {
+        return Ok(()); // collections can include each other
+    }
+    let children = match collection_children(client, collection_id) {
+        Ok(children) => children,
+        // A private or deleted sub-collection shouldn't sink the whole pack.
+        Err(e) if !root => {
+            tracing::warn!("sub-collection {collection_id}: {e}");
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    for (is_collection, id) in children {
+        if is_collection {
+            collect_items(client, &id, seen, out, false)?;
+        } else if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    Ok(())
+}
+
+fn collection_children(
+    client: &reqwest::blocking::Client,
+    collection_id: &str,
+) -> Result<Vec<(bool, String)>> {
+    let resp = client
         .post(GET_COLLECTION_URL)
         .form(&[("collectioncount", "1"), ("publishedfileids[0]", collection_id)])
         .send()
@@ -98,11 +139,30 @@ fn collection_items(collection_id: &str) -> Result<Vec<String>> {
             "GetCollectionDetails returned HTTP {status}"
         )));
     }
-    parse_collection_json(&body)
+    parse_collection_children(&body)
+}
+
+/// Title and every item (nested collections expanded) of a Workshop collection.
+pub fn fetch_pack(collection_id: &str) -> Result<(String, Vec<String>)> {
+    let items = collection_items(collection_id)?;
+    let title = get_details(&blocking_client()?, collection_id)
+        .ok()
+        .flatten()
+        .map(|item| item.title)
+        .unwrap_or_else(|| format!("Collection {collection_id}"));
+    Ok((title, items))
 }
 
 /// Item IDs (not nested collections) sorted by `sortorder`.
 pub fn parse_collection_json(text: &str) -> Result<Vec<String>> {
+    Ok(parse_collection_children(text)?
+        .into_iter()
+        .filter_map(|(is_collection, id)| (!is_collection).then_some(id))
+        .collect())
+}
+
+/// Children sorted by `sortorder` as `(is_collection, id)`; other file types are skipped.
+fn parse_collection_children(text: &str) -> Result<Vec<(bool, String)>> {
     let value: Value =
         serde_json::from_str(text).map_err(|e| Error::Workshop(format!("collection JSON: {e}")))?;
     let details = value
@@ -113,17 +173,25 @@ pub fn parse_collection_json(text: &str) -> Result<Vec<String>> {
             "not a collection, or it is private or empty".into(),
         ));
     };
-    let mut items: Vec<(u64, String)> = children
+    // filetype 0 = item, 2 = collection.
+    let mut items: Vec<(u64, bool, String)> = children
         .iter()
-        .filter(|c| c.get("filetype").and_then(json_u64).unwrap_or(0) == 0)
         .filter_map(|c| {
+            let is_collection = match c.get("filetype").and_then(json_u64).unwrap_or(0) {
+                0 => false,
+                2 => true,
+                _ => return None,
+            };
             let id = json_id(c.get("publishedfileid")?)?;
             let order = c.get("sortorder").and_then(json_u64).unwrap_or(u64::MAX);
-            Some((order, id))
+            Some((order, is_collection, id))
         })
         .collect();
-    items.sort_by_key(|(order, _)| *order);
-    Ok(items.into_iter().map(|(_, id)| id).collect())
+    items.sort_by_key(|(order, _, _)| *order);
+    Ok(items
+        .into_iter()
+        .map(|(_, is_collection, id)| (is_collection, id))
+        .collect())
 }
 
 /// Steam "required items" (children) per published file ID, 100 IDs per request.
@@ -571,6 +639,13 @@ mod tests {
               {"publishedfileid":"111","sortorder":1,"filetype":0},
               {"publishedfileid":"333","sortorder":3,"filetype":2}]}]}}"#;
         assert_eq!(parse_collection_json(json).unwrap(), vec!["111", "222"]);
+        let nested = r#"{"response":{"collectiondetails":[{"result":1,"children":[
+            {"publishedfileid":"900","sortorder":1,"filetype":2},
+            {"publishedfileid":"111","sortorder":2,"filetype":0}]}]}}"#;
+        assert_eq!(
+            parse_collection_children(nested).unwrap(),
+            vec![(true, "900".to_string()), (false, "111".to_string())]
+        );
         let not_collection =
             r#"{"response":{"collectiondetails":[{"publishedfileid":"9","result":1}]}}"#;
         assert!(parse_collection_json(not_collection).is_err());

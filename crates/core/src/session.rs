@@ -92,6 +92,11 @@ pub struct Session {
     /// An update check has finished at least once, so an empty list means "all current".
     pub updates_checked: bool,
     helper_rx: Option<Receiver<HelperMsg>>,
+    packs_rx: Option<Receiver<Vec<PackFetch>>>,
+    /// Result of the last pack check, one entry per tracked pack.
+    pub pack_status: Vec<PackStatus>,
+    /// Packs to sync as soon as their first check lands (just tracked).
+    sync_after_check: Vec<String>,
     /// Paths the current mod list was scanned from; Save is refused if settings moved away.
     loaded_paths: Option<ScanPaths>,
     pending_git: Vec<GitJob>,
@@ -174,6 +179,47 @@ enum TextureMsg {
     Done(String),
 }
 
+/// One pack's fetch: its ID and `(title, items)`, or why it failed.
+type PackFetch = (String, std::result::Result<(String, Vec<String>), String>);
+
+/// What changed in a tracked pack since its last sync.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackStatus {
+    pub id: String,
+    /// Every item in the collection now, nested collections expanded.
+    pub items: Vec<String>,
+    /// Items added since the last sync (all of them before the first sync).
+    pub added: Vec<String>,
+    /// `added` items that are not installed yet.
+    pub missing: Vec<String>,
+    /// Items the author took out of the pack since the last sync.
+    pub removed: Vec<String>,
+    pub error: Option<String>,
+}
+
+fn pack_status(
+    id: &str,
+    synced: &[String],
+    items: Vec<String>,
+    installed: &HashSet<&str>,
+) -> PackStatus {
+    let added: Vec<String> = items.iter().filter(|i| !synced.contains(i)).cloned().collect();
+    let missing = added
+        .iter()
+        .filter(|i| !installed.contains(i.as_str()))
+        .cloned()
+        .collect();
+    let removed = synced.iter().filter(|i| !items.contains(i)).cloned().collect();
+    PackStatus {
+        id: id.to_string(),
+        items,
+        added,
+        missing,
+        removed,
+        error: None,
+    }
+}
+
 fn try_take<T>(rx: &Option<Receiver<T>>) -> Option<Result<T, ()>> {
     match rx.as_ref()?.try_recv() {
         Ok(msg) => Some(Ok(msg)),
@@ -220,6 +266,9 @@ impl Session {
             workshop_updates: Vec::new(),
             updates_checked: false,
             helper_rx: None,
+            packs_rx: None,
+            pack_status: Vec::new(),
+            sync_after_check: Vec::new(),
             pending_path_activate: HashSet::new(),
             github_rx: None,
             pending_github: Vec::new(),
@@ -254,6 +303,7 @@ impl Session {
             || self.textures_rx.is_some()
             || self.updates_rx.is_some()
             || self.helper_rx.is_some()
+            || self.packs_rx.is_some()
     }
 
     pub fn steamcmd_running(&self) -> bool {
@@ -277,6 +327,7 @@ impl Session {
         self.poll_textures();
         self.poll_updates();
         self.poll_helper();
+        self.poll_packs();
         events
     }
 
@@ -1253,6 +1304,173 @@ impl Session {
         }
     }
 
+    // ---- packs (tracked Workshop collections) ---------------------------------
+
+    /// Start tracking a collection (URL or ID) and sync it once its contents arrive.
+    pub fn track_pack(&mut self, input: &str) {
+        let Some(id) = workshop::parse_collection_id(input) else {
+            self.status = "Pack: paste a Workshop collection URL or ID".into();
+            return;
+        };
+        if self.settings.packs.iter().any(|p| p.id == id) {
+            self.status = format!("Pack {id} is already tracked");
+            return;
+        }
+        self.settings.packs.push(crate::settings::Pack {
+            id: id.clone(),
+            title: format!("Collection {id}"),
+            items: Vec::new(),
+        });
+        if let Err(e) = self.settings.save() {
+            self.status = format!("Could not save settings: {e}");
+            return;
+        }
+        self.sync_after_check.push(id);
+        self.check_packs();
+    }
+
+    pub fn untrack_pack(&mut self, id: &str) {
+        self.settings.packs.retain(|p| p.id != id);
+        self.pack_status.retain(|p| p.id != id);
+        self.status = match self.settings.save() {
+            Ok(_) => "Stopped tracking the pack; its mods stay installed".into(),
+            Err(e) => format!("Could not save settings: {e}"),
+        };
+    }
+
+    /// Fetch every tracked pack's current contents (no API key) in the background.
+    pub fn check_packs(&mut self) {
+        if self.packs_rx.is_some() {
+            self.status = "Already checking packs".into();
+            return;
+        }
+        let ids: Vec<String> = self.settings.packs.iter().map(|p| p.id.clone()).collect();
+        if ids.is_empty() {
+            self.status = "No packs tracked yet".into();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let count = ids.len();
+        match std::thread::Builder::new()
+            .name("rimdeck-packs".into())
+            .spawn(move || {
+                let results = ids
+                    .into_iter()
+                    .map(|id| {
+                        let result = workshop::fetch_pack(&id).map_err(|e| e.to_string());
+                        (id, result)
+                    })
+                    .collect();
+                let _ = tx.send(results);
+            }) {
+            Ok(_) => {
+                self.packs_rx = Some(rx);
+                self.status = format!("Checking {count} pack(s)...");
+            }
+            Err(e) => self.status = format!("Could not start pack check: {e}"),
+        }
+    }
+
+    fn poll_packs(&mut self) {
+        let Some(results) = try_take(&self.packs_rx) else {
+            return;
+        };
+        self.packs_rx = None;
+        let Ok(results) = results else {
+            self.status = "Pack check ended unexpectedly".into();
+            return;
+        };
+        let installed: HashSet<&str> = self
+            .mods
+            .iter()
+            .filter_map(|m| m.published_file_id.as_deref())
+            .collect();
+        let mut statuses = Vec::new();
+        for (id, result) in results {
+            let Some(pack) = self.settings.packs.iter_mut().find(|p| p.id == id) else {
+                continue; // untracked while the check ran
+            };
+            statuses.push(match result {
+                Ok((title, items)) => {
+                    pack.title = title;
+                    pack_status(&id, &pack.items, items, &installed)
+                }
+                Err(e) => PackStatus {
+                    error: Some(e),
+                    ..pack_status(&id, &pack.items, pack.items.clone(), &installed)
+                },
+            });
+        }
+        let _ = self.settings.save(); // titles
+        self.pack_status = statuses;
+        let added: usize = self.pack_status.iter().map(|p| p.added.len()).sum();
+        let removed: usize = self.pack_status.iter().map(|p| p.removed.len()).sum();
+        self.status = match (added, removed) {
+            (0, 0) => "Packs are in sync".into(),
+            _ => format!("Packs: {added} mod(s) to add, {removed} removed by their authors"),
+        };
+        let pending = std::mem::take(&mut self.sync_after_check);
+        if !pending.is_empty() {
+            self.sync_packs(pending);
+        }
+    }
+
+    /// Add what the authors added since the last check: activate installed items in pack
+    /// order and download the rest. Removed items are only reported, never deactivated.
+    pub fn sync_packs(&mut self, ids: Vec<String>) {
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
+        for status in self.pack_status.iter_mut().filter(|p| ids.contains(&p.id)) {
+            if status.error.is_some() {
+                continue;
+            }
+            for item in status.added.drain(..) {
+                if !added.contains(&item) {
+                    added.push(item);
+                }
+            }
+            removed.append(&mut status.removed);
+            status.missing.clear();
+            if let Some(pack) = self.settings.packs.iter_mut().find(|p| p.id == status.id) {
+                pack.items = status.items.clone();
+            }
+        }
+        if let Err(e) = self.settings.save() {
+            self.status = format!("Could not save settings: {e}");
+            return;
+        }
+        if added.is_empty() && removed.is_empty() {
+            self.status = "Packs are already in sync (check again to look for changes)".into();
+            return;
+        }
+        if !added.is_empty() {
+            self.apply_collection(&added);
+        }
+        if !removed.is_empty() {
+            let names: Vec<String> = removed
+                .iter()
+                .map(|id| {
+                    self.mods
+                        .iter()
+                        .find(|m| m.published_file_id.as_deref() == Some(id.as_str()))
+                        .map(|m| m.name.clone())
+                        .unwrap_or_else(|| id.clone())
+                })
+                .collect();
+            let note = format!("Removed from the pack by its author (still installed): {}", names.join(", "));
+            self.status = if added.is_empty() {
+                note
+            } else {
+                format!("{}. {note}", self.status)
+            };
+        }
+    }
+
+    pub fn sync_all_packs(&mut self) {
+        let ids = self.pack_status.iter().map(|p| p.id.clone()).collect();
+        self.sync_packs(ids);
+    }
+
     pub fn open_in_steam(&mut self, published_file_id: &str) {
         if let Err(e) = launch::open_url(&steam::workshop_page_url(published_file_id)) {
             self.status = format!("Could not open Steam: {e}");
@@ -2043,6 +2261,39 @@ mod tests {
         assert!(msg.contains("deleted 1"), "{msg}");
         assert!(!tex.join("a.dds").exists() && tex.join("a.png").is_file());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pack_status_reports_added_missing_and_removed() {
+        let synced = vec!["1".to_string(), "2".to_string()];
+        let installed = HashSet::from(["1", "3"]);
+        let st = pack_status("p", &synced, vec!["1".into(), "3".into(), "4".into()], &installed);
+        assert_eq!(st.added, vec!["3", "4"]);
+        assert_eq!(st.missing, vec!["4"]);
+        assert_eq!(st.removed, vec!["2"]);
+        // Never synced: everything is new.
+        let first = pack_status("p", &[], vec!["1".into(), "4".into()], &installed);
+        assert_eq!((first.added.len(), first.missing), (2, vec!["4".to_string()]));
+    }
+
+    #[test]
+    fn syncing_a_pack_activates_added_items_and_records_the_snapshot() {
+        let mut s = fixture_session();
+        let ws = s.mods.iter().position(|m| m.source == ModSource::Workshop).unwrap();
+        s.mods[ws].published_file_id = Some("12345".into());
+        let path = s.mods[ws].path.clone();
+        s.set_active(&path, false);
+        s.settings.packs.push(crate::settings::Pack {
+            id: "77".into(),
+            title: "Pack".into(),
+            items: vec![],
+        });
+        let installed = HashSet::from(["12345"]);
+        s.pack_status = vec![pack_status("77", &[], vec!["12345".into()], &installed)];
+        s.sync_packs(vec!["77".into()]);
+        assert!(s.is_active(&path));
+        assert_eq!(s.settings.packs[0].items, vec!["12345"]);
+        assert!(s.pack_status[0].added.is_empty());
     }
 
     #[test]

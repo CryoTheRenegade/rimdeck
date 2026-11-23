@@ -31,6 +31,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             draw_main(frame, app);
             draw_updates(frame, app);
         }
+        Screen::Packs => {
+            draw_main(frame, app);
+            draw_packs(frame, app);
+        }
         Screen::Git => {
             draw_main(frame, app);
             draw_git(frame, app);
@@ -502,6 +506,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("h", "github"),
     ("G", "git"),
     ("U", "updates"),
+    ("P", "packs"),
     ("u", "steamcmd"),
     ("r", "rescan"),
     ("/", "search"),
@@ -885,6 +890,100 @@ fn draw_updates(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(list, chunks[1], &mut app.updates_state);
 }
 
+fn draw_packs(frame: &mut Frame, app: &mut App) {
+    let height = (frame.area().height.saturating_mul(80) / 100).clamp(14, frame.area().height);
+    let area = centered(frame.area(), 90, height);
+    frame.render_widget(Clear, area);
+    let outer = pane(title("Packs", "tracked Workshop collections".into()), true);
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(3)])
+        .split(inner);
+    let keys = [
+        ("t", "track"),
+        ("c", "check"),
+        ("Enter/s", "sync"),
+        ("A", "sync all"),
+        ("o", "open in Steam"),
+        ("X", "stop tracking"),
+        ("Esc", "close"),
+    ];
+    let mut spans = Vec::new();
+    for (key, label) in keys {
+        spans.push(Span::styled(key, KEY_STYLE));
+        spans.push(Span::styled(format!(" {label}  "), LABEL_STYLE));
+    }
+    let hint = if app.settings.packs.is_empty() {
+        "Press t and paste a modpack's Workshop collection URL to keep it complete."
+    } else {
+        "Sync adds and activates mods the author added; removed ones are only listed."
+    };
+    frame.render_widget(
+        Paragraph::new(vec![Line::from(spans), Line::from(Span::styled(hint, DIM))]),
+        chunks[0],
+    );
+
+    let name_of = |id: &String| {
+        app.mods
+            .iter()
+            .find(|m| m.published_file_id.as_deref() == Some(id.as_str()))
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| id.clone())
+    };
+    let items: Vec<ListItem> = app
+        .settings
+        .packs
+        .iter()
+        .map(|pack| {
+            let status = app.pack_status.iter().find(|p| p.id == pack.id);
+            let (line, warn) = match status {
+                None => (format!("{} mods at the last sync", pack.items.len()), false),
+                Some(st) if st.error.is_some() => (
+                    format!("couldn't check: {}", st.error.as_deref().unwrap_or_default()),
+                    true,
+                ),
+                Some(st) if st.added.is_empty() && st.removed.is_empty() => {
+                    (format!("{} mods, in sync", st.items.len()), false)
+                }
+                Some(st) => (
+                    format!(
+                        "{} mods: {} to add ({} to download), {} removed by the author",
+                        st.items.len(),
+                        st.added.len(),
+                        st.missing.len(),
+                        st.removed.len()
+                    ),
+                    true,
+                ),
+            };
+            let mut lines = vec![
+                Line::from(pack.title.clone()),
+                Line::from(Span::styled(
+                    format!("  {line}"),
+                    if warn { Style::new().fg(OCHRE) } else { DIM },
+                )),
+            ];
+            if let Some(st) = status.filter(|st| !st.removed.is_empty()) {
+                let names: Vec<String> = st.removed.iter().map(name_of).collect();
+                lines.push(Line::from(Span::styled(
+                    format!("  removed: {}", names.join(", ")),
+                    DIM,
+                )));
+            }
+            ListItem::new(lines)
+        })
+        .collect();
+    let list = List::new(items)
+        .highlight_style(Style::new().bg(SELECTED))
+        .highlight_symbol("▌");
+    let len = app.settings.packs.len();
+    app.packs_selected = app.packs_selected.min(len.saturating_sub(1));
+    app.packs_state.select((len > 0).then_some(app.packs_selected));
+    frame.render_stateful_widget(list, chunks[1], &mut app.packs_state);
+}
+
 fn draw_github(frame: &mut Frame, app: &mut App) {
     let height = (frame.area().height.saturating_mul(80) / 100).clamp(16, frame.area().height);
     let area = centered(frame.area(), 84, height);
@@ -1096,6 +1195,11 @@ fn draw_path_prompt(frame: &mut Frame, app: &App) {
     let rule_hint;
     let (title, action, label) = match app.path_prompt {
         PathPromptKind::Export => ("Export mod list", "Enter write  Esc cancel", "Path"),
+        PathPromptKind::Pack => (
+            "Track a pack",
+            "Paste a Workshop collection URL or ID  Enter track and sync  Esc cancel",
+            "Collection",
+        ),
         PathPromptKind::Rule => {
             let pid = app
                 .selected_mod()
@@ -1156,6 +1260,7 @@ rimdeck — RimSort-style RimWorld mod manager
   G               git clone / pull HEAD (GitLab, GitGud, Forgejo, …)
   U               Workshop updates: check, update, open in Steam, switch backend
   W               open the selected mod's Workshop page in Steam
+  P               packs: track Workshop collections (modpacks) and sync added mods
   X X             unsubscribe from the selected mod (Steam app backend)
   u               SteamCMD, GitHub, or git pull selected mod
   t / b           user loadTop / loadBottom (saved)

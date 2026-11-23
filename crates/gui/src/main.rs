@@ -48,15 +48,17 @@ fn main() -> iced::Result {
 enum View {
     Mods,
     Workshop,
+    Updates,
     Github,
     Git,
     Settings,
 }
 
 impl View {
-    const TABS: [(View, &'static str); 5] = [
+    const TABS: [(View, &'static str); 6] = [
         (View::Mods, "Mods"),
         (View::Workshop, "Workshop"),
+        (View::Updates, "Updates"),
         (View::Github, "GitHub"),
         (View::Git, "Git"),
         (View::Settings, "Settings"),
@@ -79,6 +81,8 @@ struct Gui {
     workshop_query: String,
     github_query: String,
     git_query: String,
+    /// Collection URL or ID typed into the Packs section.
+    pack_query: String,
     /// packageId typed into the rule editor in the info panel.
     rule_input: String,
     /// The second toolbar row with occasional tools is showing.
@@ -165,6 +169,12 @@ enum Message {
     WorkshopCollection,
     SteamBackend(SteamBackend),
     CheckUpdates,
+    PackQuery(String),
+    TrackPack,
+    CheckPacks,
+    SyncPack(String),
+    SyncAllPacks,
+    UntrackPack(String),
     UpdateAllOutdated,
     UpdateWorkshop(String),
     OpenInSteam(String),
@@ -259,6 +269,7 @@ impl Gui {
             workshop_query: String::new(),
             github_query: String::new(),
             git_query: String::new(),
+            pack_query: String::new(),
             rule_input: String::new(),
             tools_open: false,
             confirm_clear: false,
@@ -598,6 +609,7 @@ impl Gui {
         let body = match self.view {
             View::Mods => self.main_view(),
             View::Workshop => self.workshop_view(),
+            View::Updates => self.updates_view(),
             View::Github => self.github_view(),
             View::Git => self.git_view(),
             View::Settings => self.settings_view(),

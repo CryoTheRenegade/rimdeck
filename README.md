@@ -72,6 +72,7 @@ Keyboard: ↑/↓ select, Ctrl+↑/↓ move the selected active mod, Enter activ
 | `G` | Git updater (clone/pull HEAD from any git host; needs `git` on PATH) |
 | `U` | Workshop updates: check, update one/all, open in Steam, switch backend (`b`) |
 | `W` | Open the selected mod's Workshop page in Steam |
+| `P` | Packs: track Workshop collections (modpacks), check, sync added mods |
 | `X` `X` | Unsubscribe from the selected mod (Steam app backend) |
 | `u` | SteamCMD, GitHub release, or git pull for the selected mod |
 | `t` / `b` | Toggle user `loadTop` / `loadBottom` for the selected mod |
@@ -92,7 +93,9 @@ Workshop search (`n`) uses the Steam WebAPI. Put a key in settings or the `STEAM
 - **SteamCMD** (default): works without the Steam app; downloads into your Workshop folder; can't subscribe.
 - **Steam app**: uses your running Steam client through the `rimdeck-steam` helper (Steamworks, as RimWorld 294100). Download becomes Subscribe, Update asks Steam to re-download now, and Unsubscribe is available (Steam removes the files). Steam shows you as playing RimWorld only while the helper runs.
 
-**Updates** (Workshop tab, `U` in the TUI) compares each Workshop mod with Steam's public API (no key needed): the installed time comes from Steam's `appworkshop_294100.acf`, falling back to the folder date. Update one, update all, or open the item in Steam (`W` on the main screen). `X` twice unsubscribes the selected mod with the Steam app backend.
+**Packs** (Updates tab, `P` in the TUI) keep modpacks distributed as Workshop collections complete. Track a collection by URL or ID; nested collections (packs split into parts) are expanded. Check compares the collection with its contents at your last sync: Sync activates installed mods the author added (in pack order) and downloads the rest with the Workshop via backend; mods the author removed are listed, never deactivated. The first sync of a newly tracked pack treats every item as added, like a collection import. Updates to the pack's mods themselves come from Updates below.
+
+**Updates** (Updates tab, `U` in the TUI) compares each Workshop mod with Steam's public API (no key needed): the installed time comes from Steam's `appworkshop_294100.acf`, falling back to the folder date. Update one, update all, or open the item in Steam (`W` on the main screen). `X` twice unsubscribes the selected mod with the Steam app backend.
 
 SteamCMD (`u`, or from workshop results) uses `+workshop_download_item 294100 <id> validate` like RimSort. The executable is auto-detected, overridable in settings, and downloaded into `%APPDATA%\rimdeck\rimdeck\config\steamcmd\` on first use if missing.
 
