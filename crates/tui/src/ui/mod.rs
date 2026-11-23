@@ -898,6 +898,7 @@ fn draw_git(frame: &mut Frame, app: &mut App) {
         .iter()
         .map(|item| {
             let behind = match item.behind {
+                _ if item.is_detached() => "detached".to_string(),
                 Some(0) => "up to date".to_string(),
                 Some(n) => format!("{n} behind"),
                 None => "—".into(),

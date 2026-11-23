@@ -28,6 +28,11 @@ impl GitModInfo {
     pub fn has_update(&self) -> bool {
         self.behind.is_some_and(|n| n > 0)
     }
+
+    /// HEAD is a bare commit, not a branch (`git rev-parse --abbrev-ref HEAD` == "HEAD").
+    pub fn is_detached(&self) -> bool {
+        self.branch == "HEAD"
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -520,7 +525,6 @@ fn check_many(paths: &[PathBuf], tx: &Sender<GitMsg>) -> GitReport {
 }
 
 fn check_one(path: &Path) -> GitCheckResult {
-    // Read .git directly: spawning `git` 3x per repo took minutes with hundreds of clones.
     let (origin, branch, short_sha) = read_git_dir(path).unwrap_or_default();
     if let Err(e) = git_output(path, &["fetch", "--prune", "origin"]) {
         return GitCheckResult {

@@ -835,9 +835,7 @@ impl Session {
             .mod_ref(path)
             .is_some_and(|m| m.source == ModSource::Local && gitmod::is_git_repo(&m.path))
         {
-            self.enqueue_git(GitJob::Pull {
-                paths: vec![path.to_path_buf()],
-            });
+            self.git_pull(path);
             return;
         }
         let Some(pfid) = self.published_file_id(path) else {
@@ -1238,16 +1236,25 @@ impl Session {
     }
 
     pub fn git_check(&mut self) {
-        if self.git_items.is_empty() {
-            self.status = "Git: no cloned mods".into();
+        // Detached checkouts have no branch to compare against; skip them.
+        let paths: Vec<PathBuf> = self
+            .git_items
+            .iter()
+            .filter(|i| !i.is_detached())
+            .map(|i| i.path.clone())
+            .collect();
+        if paths.is_empty() {
+            self.status = "Git: no cloned mods on a branch to check".into();
             return;
         }
-        self.enqueue_git(GitJob::Check {
-            paths: self.git_items.iter().map(|i| i.path.clone()).collect(),
-        });
+        self.enqueue_git(GitJob::Check { paths });
     }
 
     pub fn git_pull(&mut self, path: &Path) {
+        if let Some(item) = self.git_items.iter().find(|i| i.path == path && i.is_detached()) {
+            self.status = format!("Git: {} is detached (not on a branch); not pulled", item.name);
+            return;
+        }
         self.enqueue_git(GitJob::Pull {
             paths: vec![path.to_path_buf()],
         });
@@ -1493,6 +1500,24 @@ mod tests {
         s.apply_reload(collect_reload(&s.settings).unwrap());
         assert_eq!(s.active_paths, from_disk);
         assert!(!s.dirty);
+    }
+
+    #[test]
+    fn detached_git_mod_is_not_pulled() {
+        let mut s = Session::new(Settings::default());
+        let path = PathBuf::from("Mods/detached");
+        s.git_items.push(GitModInfo {
+            path: path.clone(),
+            name: "Detached".into(),
+            origin: String::new(),
+            branch: "HEAD".into(),
+            short_sha: "abc1234".into(),
+            behind: None,
+            error: None,
+        });
+        s.git_pull(&path);
+        assert!(!s.is_busy());
+        assert!(s.status.contains("detached"));
     }
 
     #[test]

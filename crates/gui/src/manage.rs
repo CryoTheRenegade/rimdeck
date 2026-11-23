@@ -184,6 +184,7 @@ impl Gui {
         .spacing(8);
         let rows = s.git_items.iter().map(|item| {
             let status = match (&item.error, item.behind) {
+                _ if item.is_detached() => "detached".into(),
                 (Some(e), _) => e.clone(),
                 (None, Some(0)) => "up to date".into(),
                 (None, Some(n)) => format!("{n} commit(s) behind"),
