@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input, toggler};
 use iced::{Alignment, Element, Length};
 
-use rimtui_core::workshop::format_subs;
+use rimdeck_core::workshop::format_subs;
 
 use crate::{Gui, Message, DIM_COLOR, WARN_COLOR};
 

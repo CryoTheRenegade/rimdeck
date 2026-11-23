@@ -15,7 +15,7 @@ use crate::settings::Settings;
 /// in one process (RimSort `STEAMCMD_BATCH_SIZE`).
 pub const BATCH_SIZE: usize = 25;
 
-const USER_AGENT: &str = concat!("rimtui/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("rimdeck/", env!("CARGO_PKG_VERSION"));
 const STEAMCMD_ZIP_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
 #[cfg(not(windows))]
 const STEAMCMD_TGZ_URL: &str =
@@ -170,7 +170,7 @@ pub fn downloaded_item_dir(install_dir: &Path, published_file_id: &str) -> PathB
 pub fn spawn(req: SteamcmdRequest, tx: Sender<SteamcmdMsg>) {
     let tx_thread = tx.clone();
     if let Err(e) = std::thread::Builder::new()
-        .name("rimtui-steamcmd".into())
+        .name("rimdeck-steamcmd".into())
         .spawn(move || {
             let report = run_jobs(&req, &tx_thread);
             let _ = tx_thread.send(SteamcmdMsg::Done(report));
@@ -683,7 +683,7 @@ Success. Downloaded item 3396308787 to "c:\users\me\steamapps\workshop\content\2
 
     #[test]
     fn candidate_list_includes_managed_dir() {
-        let managed = PathBuf::from(r"C:\Users\me\AppData\Roaming\rimtui\config\steamcmd");
+        let managed = PathBuf::from(r"C:\Users\me\AppData\Roaming\rimdeck\config\steamcmd");
         let cands = steamcmd_candidates(Some(managed.clone()), None);
         assert!(cands.iter().any(|p| p.starts_with(&managed)));
     }
@@ -702,7 +702,7 @@ Success. Downloaded item 3396308787 to "c:\users\me\steamapps\workshop\content\2
             zip.finish().unwrap();
         }
         let bytes = cursor.into_inner();
-        let dir = std::env::temp_dir().join(format!("rimtui-steamcmd-zip-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-steamcmd-zip-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         extract_zip_exe(&bytes, &dir, "steamcmd.exe").unwrap();

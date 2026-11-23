@@ -1,4 +1,4 @@
-//! rimtui-gui — RimWorld mod manager GUI (GPL-3.0-only), built on the shared rimtui core.
+//! rimdeck — RimWorld mod manager GUI (GPL-3.0-only), built on the shared rimdeck core.
 //!
 //! Inspired by RimSort (https://github.com/RimSort/RimSort).
 
@@ -16,10 +16,10 @@ use iced::widget::{
 };
 use iced::{Color, Element, Length, Subscription, Task, Theme};
 
-use rimtui_core::issues::Severity;
-use rimtui_core::model::{Mod, ModSource};
-use rimtui_core::session::{self, Session};
-use rimtui_core::settings::{Settings, SettingsField, SortMode};
+use rimdeck_core::issues::Severity;
+use rimdeck_core::model::{Mod, ModSource};
+use rimdeck_core::session::{self, Session};
+use rimdeck_core::settings::{Settings, SettingsField, SortMode};
 
 const ERROR_COLOR: Color = Color::from_rgb(0.95, 0.35, 0.35);
 const WARN_COLOR: Color = Color::from_rgb(0.95, 0.8, 0.3);
@@ -195,7 +195,7 @@ impl Gui {
 
     fn title(&self) -> String {
         let dirty = if self.session.dirty { " *" } else { "" };
-        format!("rimtui{dirty}")
+        format!("rimdeck{dirty}")
     }
 
     fn subscription(&self) -> Subscription<Message> {

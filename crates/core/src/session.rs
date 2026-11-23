@@ -298,7 +298,7 @@ impl Session {
         self.status = "Scanning mods...".into();
         let settings = self.settings.clone();
         match std::thread::Builder::new()
-            .name("rimtui-scan".into())
+            .name("rimdeck-scan".into())
             .spawn(move || {
                 let _ = tx.send(collect_reload(&settings));
             }) {
@@ -833,7 +833,7 @@ impl Session {
         }
     }
 
-    /// Merge installed Workshop mods into steamDB.json in the background (`rimtui build-db`),
+    /// Merge installed Workshop mods into steamDB.json in the background (`rimdeck-tui build-db`),
     /// fetching Steam "required items" as dependencies when an API key is set.
     pub fn build_db(&mut self) {
         if self.dbbuild_rx.is_some() {
@@ -847,7 +847,7 @@ impl Session {
         let (tx, rx) = mpsc::channel();
         let settings = self.settings.clone();
         match std::thread::Builder::new()
-            .name("rimtui-dbbuild".into())
+            .name("rimdeck-dbbuild".into())
             .spawn(move || {
                 let result = crate::dbbuild::build_db_file(&settings, &out, true);
                 let _ = tx.send(result.map_err(|e| e.to_string()));
@@ -892,7 +892,7 @@ impl Session {
         }
         let (tx, rx) = mpsc::channel();
         match std::thread::Builder::new()
-            .name("rimtui-textures".into())
+            .name("rimdeck-textures".into())
             .spawn(move || {
                 let _ = tx.send(TextureMsg::Done(run_textures(&roots, clean, &tx)));
             }) {
@@ -1590,7 +1590,7 @@ impl Session {
     }
 }
 
-/// Log to `<config>/rimtui.log` (or nowhere). Frontends call this once at startup.
+/// Log to `<config>/rimdeck.log` (or nowhere). Frontends call this once at startup.
 pub fn init_tracing() {
     let env = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -1703,7 +1703,7 @@ mod tests {
 
     #[test]
     fn save_before_scan_keeps_existing_mods_config() {
-        let dir = std::env::temp_dir().join(format!("rimtui-save-guard-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-save-guard-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let settings = Settings {
             config_dir: dir.clone(),
@@ -1720,7 +1720,7 @@ mod tests {
     #[test]
     fn save_refused_after_paths_change_until_rescan() {
         let mut s = fixture_session();
-        let dir = std::env::temp_dir().join(format!("rimtui-path-guard-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-path-guard-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         s.settings.config_dir = dir.clone();
         let path = s.settings.mods_config_path();
@@ -1733,7 +1733,7 @@ mod tests {
     #[test]
     fn scan_result_uses_mods_config_saved_during_scan() {
         let mut s = fixture_session();
-        let dir = std::env::temp_dir().join(format!("rimtui-scan-race-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-scan-race-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         s.settings.config_dir = dir.clone();
         let path = s.settings.mods_config_path();
@@ -1802,7 +1802,7 @@ mod tests {
     #[test]
     fn save_clears_missing_id_warnings() {
         let mut s = fixture_session();
-        let dir = std::env::temp_dir().join(format!("rimtui-missing-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-missing-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         s.settings.config_dir = dir.clone();
         let cfg = ModsConfig {
@@ -1834,7 +1834,7 @@ mod tests {
 
     #[test]
     fn textures_optimize_then_clean() {
-        let dir = std::env::temp_dir().join(format!("rimtui-tex-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-tex-{}", std::process::id()));
         let tex = dir.join("Textures");
         std::fs::create_dir_all(&tex).unwrap();
         image::RgbaImage::from_pixel(8, 6, image::Rgba([200, 10, 10, 255]))

@@ -3898,20 +3898,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "459aab4d862e9218eb24ddeec79f6dc6b4377d2500f1a4213d26153b9dca835e"
 
 [[package]]
-name = "rimtui"
+name = "rimdeck"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "crossterm",
- "image",
- "ratatui",
- "ratatui-image",
- "rimtui-core",
+ "iced",
+ "rfd",
+ "rimdeck-core",
  "tracing",
 ]
 
 [[package]]
-name = "rimtui-core"
+name = "rimdeck-core"
 version = "0.1.0"
 dependencies = [
  "ddsify",
@@ -3930,12 +3927,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "rimtui-gui"
+name = "rimdeck-tui"
 version = "0.1.0"
 dependencies = [
- "iced",
- "rfd",
- "rimtui-core",
+ "anyhow",
+ "crossterm",
+ "image",
+ "ratatui",
+ "ratatui-image",
+ "rimdeck-core",
  "tracing",
 ]
 

@@ -405,7 +405,7 @@ pub fn git_available() -> bool {
 pub fn spawn(job: GitJob, tx: Sender<GitMsg>) {
     let tx_thread = tx.clone();
     if let Err(e) = std::thread::Builder::new()
-        .name("rimtui-git".into())
+        .name("rimdeck-git".into())
         .spawn(move || {
             let report = run_job(&job, &tx_thread);
             let _ = tx_thread.send(GitMsg::Done(report));
@@ -666,7 +666,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "rimtui-git-{}-{}-{}",
+            "rimdeck-git-{}-{}-{}",
             label,
             std::process::id(),
             TEMP_SEQ.fetch_add(1, Ordering::Relaxed)

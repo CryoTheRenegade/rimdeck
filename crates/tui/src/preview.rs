@@ -40,7 +40,7 @@ pub fn load_protocol(picker: &mut Picker, path: &Path) -> anyhow::Result<Statefu
     Ok(picker.new_resize_protocol(image))
 }
 
-/// Human-readable name of the terminal rimtui is running in.
+/// Human-readable name of the terminal rimdeck is running in.
 pub fn terminal_emulator_name() -> String {
     if std::env::var_os("WT_SESSION").is_some() || std::env::var_os("WT_PROFILE_ID").is_some() {
         return "Windows Terminal".into();

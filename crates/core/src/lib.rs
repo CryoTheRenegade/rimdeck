@@ -1,4 +1,4 @@
-//! Shared RimWorld mod-manager core for the rimtui TUI and GUI (GPL-3.0-only).
+//! Shared RimWorld mod-manager core for the rimdeck TUI and GUI (GPL-3.0-only).
 //!
 //! Inspired by RimSort (https://github.com/RimSort/RimSort).
 

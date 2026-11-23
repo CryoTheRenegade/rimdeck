@@ -1,6 +1,6 @@
 [package]
-name = "rimtui-core"
-description = "Shared RimWorld mod-manager logic (scan, sort, rules, Steam, GitHub, git) for rimtui"
+name = "rimdeck-core"
+description = "Shared RimWorld mod-manager logic (scan, sort, rules, Steam, GitHub, git) for rimdeck"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

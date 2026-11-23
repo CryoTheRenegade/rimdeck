@@ -1,5 +1,5 @@
 [package]
-name = "rimtui-gui"
+name = "rimdeck"
 description = "A RimWorld mod manager GUI inspired by RimSort"
 readme = "../../README.md"
 version.workspace = true
@@ -7,7 +7,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-rimtui-core.workspace = true
+rimdeck-core.workspace = true
 iced = { version = "0.14", features = ["image", "tokio"] }
 rfd = "0.18"
 tracing.workspace = true

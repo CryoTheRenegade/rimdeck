@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn lists_xml_and_dirs_skips_other_files() {
-        let dir = std::env::temp_dir().join(format!("rimtui-browse-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-browse-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("sub")).unwrap();
         fs::write(dir.join("keep.xml"), b"<ModsConfigData/>").unwrap();
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn activate_enters_directory_then_picks_xml() {
-        let dir = std::env::temp_dir().join(format!("rimtui-browse2-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-browse2-{}", std::process::id()));
         let nested = dir.join("lists");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&nested).unwrap();
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn go_up_returns_to_parent() {
-        let dir = std::env::temp_dir().join(format!("rimtui-browse3-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-browse3-{}", std::process::id()));
         let nested = dir.join("lists");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&nested).unwrap();

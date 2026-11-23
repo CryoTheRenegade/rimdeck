@@ -5,8 +5,8 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::{App, InputMode, Pane, PathPromptKind, Screen};
-use rimtui_core::issues::Severity;
-use rimtui_core::settings::SettingsField;
+use rimdeck_core::issues::Severity;
+use rimdeck_core::settings::SettingsField;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     match app.screen {
@@ -123,7 +123,7 @@ fn draw_info(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             return Some(line);
         }
-        rimtui_core::gitmod::is_git_repo(path).then(|| "git: cloned repo".to_string())
+        rimdeck_core::gitmod::is_git_repo(path).then(|| "git: cloned repo".to_string())
     });
     if let Some(m) = app.selected_mod() {
         lines.push(Line::from(Span::styled(
@@ -307,11 +307,11 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect, pane: Pane) {
     frame.render_stateful_widget(list, area, state);
 }
 
-fn source_tag(source: rimtui_core::model::ModSource) -> &'static str {
+fn source_tag(source: rimdeck_core::model::ModSource) -> &'static str {
     match source {
-        rimtui_core::model::ModSource::Dlc => "DLC",
-        rimtui_core::model::ModSource::Local => "L",
-        rimtui_core::model::ModSource::Workshop => "W",
+        rimdeck_core::model::ModSource::Dlc => "DLC",
+        rimdeck_core::model::ModSource::Local => "L",
+        rimdeck_core::model::ModSource::Workshop => "W",
     }
 }
 
@@ -416,7 +416,7 @@ fn status_text(app: &App) -> String {
         String::new()
     };
     format!(
-        " rimtui{dirty}{spin}  {}  {}{search}",
+        " rimdeck{dirty}{spin}  {}  {}{search}",
         app.status,
         help_plain()
     )
@@ -424,7 +424,7 @@ fn status_text(app: &App) -> String {
 
 fn status_line(app: &App) -> Line<'_> {
     let mut spans = vec![Span::styled(
-        " rimtui",
+        " rimdeck",
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
@@ -717,7 +717,7 @@ fn draw_workshop(frame: &mut Frame, app: &mut App) {
                 "{} {}  ({}){installed}{tags}",
                 item.published_file_id,
                 item.title,
-                rimtui_core::workshop::format_subs(item.subscriptions),
+                rimdeck_core::workshop::format_subs(item.subscriptions),
             );
             ListItem::new(label)
         })
@@ -808,10 +808,10 @@ fn draw_github(frame: &mut Frame, app: &mut App) {
                     .map(|m| m.name.as_str())
                     .unwrap_or("(missing)");
                 let releases = cache.releases_for(&entry.owner_repo);
-                let latest = rimtui_core::github::latest_stable_release(&releases)
+                let latest = rimdeck_core::github::latest_stable_release(&releases)
                     .map(|r| r.tag.as_str())
                     .unwrap_or("—");
-                let has_update = rimtui_core::github::update_for_entry(entry, &releases).is_some();
+                let has_update = rimdeck_core::github::update_for_entry(entry, &releases).is_some();
                 let auto = if entry.auto_update { "  auto" } else { "" };
                 let label = format!(
                     "{name}  {}  {} → {latest}{auto}",
@@ -992,7 +992,7 @@ fn draw_help(frame: &mut Frame) {
     let area = centered(frame.area(), 76, 33);
     frame.render_widget(Clear, area);
     let text = "\
-rimtui — RimSort-style RimWorld mod manager
+rimdeck — RimSort-style RimWorld mod manager
 
   Tab             switch inactive / active
   j k / arrows    move selection

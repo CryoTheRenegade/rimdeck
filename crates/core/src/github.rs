@@ -11,7 +11,7 @@ use zip::ZipArchive;
 use crate::error::{Error, Result};
 use crate::settings::Settings;
 
-const USER_AGENT: &str = concat!("rimtui/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("rimdeck/", env!("CARGO_PKG_VERSION"));
 const TIMEOUT_SECS: u64 = 120;
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const API_ACCEPT: &str = "application/vnd.github+json";
@@ -393,7 +393,7 @@ pub enum UnwrapResult {
 pub fn spawn(req: GithubRequest, tx: Sender<GithubMsg>) {
     let tx_thread = tx.clone();
     if let Err(e) = std::thread::Builder::new()
-        .name("rimtui-github".into())
+        .name("rimdeck-github".into())
         .spawn(move || {
             let report = run_job(&req, &tx_thread);
             let _ = tx_thread.send(GithubMsg::Done(report));
@@ -1136,8 +1136,8 @@ fn backup_path_for(mod_path: &Path) -> PathBuf {
     let name = file_name(mod_path);
     mod_path
         .parent()
-        .map(|p| p.join(format!("{name}.rimtui_backup")))
-        .unwrap_or_else(|| PathBuf::from(format!("{name}.rimtui_backup")))
+        .map(|p| p.join(format!("{name}.rimdeck_backup")))
+        .unwrap_or_else(|| PathBuf::from(format!("{name}.rimdeck_backup")))
 }
 
 fn file_name(path: &Path) -> String {
@@ -1255,7 +1255,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "rimtui-gh-{}-{}-{}",
+            "rimdeck-gh-{}-{}-{}",
             label,
             std::process::id(),
             TEMP_SEQ.fetch_add(1, Ordering::Relaxed)

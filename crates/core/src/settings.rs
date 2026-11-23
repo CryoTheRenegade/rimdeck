@@ -114,13 +114,21 @@ impl Default for Settings {
 
 impl Settings {
     pub fn config_file_path() -> Option<PathBuf> {
-        let dirs = directories::ProjectDirs::from("", "rimtui", "rimtui")?;
+        let dirs = directories::ProjectDirs::from("", "rimdeck", "rimdeck")?;
         Some(dirs.config_dir().join("settings.toml"))
     }
 
     pub fn log_file_path() -> Option<PathBuf> {
-        let dirs = directories::ProjectDirs::from("", "rimtui", "rimtui")?;
-        Some(dirs.config_dir().join("rimtui.log"))
+        let dirs = directories::ProjectDirs::from("", "rimdeck", "rimdeck")?;
+        Some(dirs.config_dir().join("rimdeck.log"))
+    }
+
+    /// rimdeck was called rimtui: move that config folder over once, before anything is read.
+    fn migrate_legacy_config() {
+        let old = directories::ProjectDirs::from("", "rimtui", "rimtui");
+        if let (Some(old), Some(new)) = (old, Self::config_dir_path()) {
+            migrate_config_dir(old.config_dir(), &new);
+        }
     }
 
     pub fn config_dir_path() -> Option<PathBuf> {
@@ -192,6 +200,7 @@ impl Settings {
     }
 
     pub fn load() -> Result<Self> {
+        Self::migrate_legacy_config();
         let Some(path) = Self::config_file_path() else {
             return Ok(Self::default().with_autodetect());
         };
@@ -453,6 +462,30 @@ impl SettingsField {
     }
 }
 
+/// Move every entry of `old` into `new` when only `old` holds a settings.toml.
+/// Entries already in `new` (e.g. a fresh log file) are left where they are.
+fn migrate_config_dir(old: &Path, new: &Path) {
+    if new.join("settings.toml").exists() || !old.join("settings.toml").exists() {
+        return;
+    }
+    if let Err(e) = fs::create_dir_all(new) {
+        tracing::warn!("could not create {}: {e}", new.display());
+        return;
+    }
+    let Ok(entries) = fs::read_dir(old) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let to = new.join(entry.file_name());
+        if !to.exists() {
+            if let Err(e) = fs::rename(entry.path(), &to) {
+                tracing::warn!("could not move {} to {}: {e}", entry.path().display(), to.display());
+            }
+        }
+    }
+    tracing::info!("moved config from {} to {}", old.display(), new.display());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,6 +532,26 @@ mod tests {
         assert_eq!(s.instance_name(), "Modded", "the active instance is not removed");
         s.set_text_field(SettingsField::Instance, "- Default");
         assert!(s.instances.is_empty());
+    }
+
+    #[test]
+    fn migrates_legacy_config_once() {
+        let dir = std::env::temp_dir().join(format!("rimdeck-migrate-{}", std::process::id()));
+        let (old, new) = (dir.join("old"), dir.join("new"));
+        fs::create_dir_all(old.join("steamcmd")).unwrap();
+        fs::write(old.join("settings.toml"), "a").unwrap();
+        fs::write(old.join("steamcmd").join("x"), "b").unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(new.join("rimdeck.log"), "log").unwrap();
+        migrate_config_dir(&old, &new);
+        assert_eq!(fs::read_to_string(new.join("settings.toml")).unwrap(), "a");
+        assert!(new.join("steamcmd").join("x").is_file());
+        assert!(!old.join("settings.toml").exists());
+        // Second run: the new folder has settings now, so nothing moves back or over.
+        fs::write(old.join("settings.toml"), "stale").unwrap();
+        migrate_config_dir(&old, &new);
+        assert_eq!(fs::read_to_string(new.join("settings.toml")).unwrap(), "a");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

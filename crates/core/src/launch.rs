@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn finds_win64_exe() {
-        let dir = std::env::temp_dir().join(format!("rimtui-launch-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-launch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("RimWorldWin64.exe");

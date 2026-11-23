@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn round_trip_user_rules_file() {
-        let dir = std::env::temp_dir().join(format!("rimtui-rules-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-rules-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("userRules.json");

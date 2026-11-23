@@ -10,7 +10,7 @@ use zip::ZipArchive;
 
 use crate::error::{Error, Result};
 
-const USER_AGENT: &str = concat!("rimtui/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("rimdeck/", env!("CARGO_PKG_VERSION"));
 const TIMEOUT_SECS: u64 = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +83,7 @@ struct CacheEntry {
 pub fn spawn(req: FetchRequest, tx: Sender<FetchMsg>) {
     let tx_thread = tx.clone();
     if let Err(e) = std::thread::Builder::new()
-        .name("rimtui-fetch".into())
+        .name("rimdeck-fetch".into())
         .spawn(move || {
             let report = run_fetch(&req, &tx_thread);
             let _ = tx_thread.send(FetchMsg::Done(report));
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn write_atomic_replaces_file() {
-        let dir = std::env::temp_dir().join(format!("rimtui-fetch-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-fetch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("steamDB.json");

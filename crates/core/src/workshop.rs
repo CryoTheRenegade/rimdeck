@@ -7,7 +7,7 @@ use crate::constants::RIMWORLD_STEAM_APP_ID;
 use crate::error::{Error, Result};
 use crate::steamcmd::is_pfid;
 
-const USER_AGENT: &str = concat!("rimtui/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("rimdeck/", env!("CARGO_PKG_VERSION"));
 const QUERY_FILES_URL: &str = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/";
 const GET_DETAILS_URL: &str =
     "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/";
@@ -46,7 +46,7 @@ pub enum WorkshopMsg {
 pub fn spawn(req: SearchRequest, tx: Sender<WorkshopMsg>) {
     let tx_thread = tx.clone();
     if let Err(e) = std::thread::Builder::new()
-        .name("rimtui-workshop".into())
+        .name("rimdeck-workshop".into())
         .spawn(move || {
             let result = search(&req).map_err(|e| redact(&e.to_string(), &req.api_key));
             let _ = tx_thread.send(WorkshopMsg::Done(result));
@@ -72,7 +72,7 @@ pub fn parse_collection_id(input: &str) -> Option<String> {
 pub fn spawn_collection(collection_id: String, tx: Sender<WorkshopMsg>) {
     let tx_thread = tx.clone();
     if let Err(e) = std::thread::Builder::new()
-        .name("rimtui-collection".into())
+        .name("rimdeck-collection".into())
         .spawn(move || {
             let result = collection_items(&collection_id).map_err(|e| e.to_string());
             let _ = tx_thread.send(WorkshopMsg::Collection(result));

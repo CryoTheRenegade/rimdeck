@@ -41,7 +41,7 @@ mod tests {
 
     #[test]
     fn export_import_round_trip() {
-        let dir = std::env::temp_dir().join(format!("rimtui-lists-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-lists-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("my-list");

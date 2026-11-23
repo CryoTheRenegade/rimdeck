@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn preview_path_finds_about_preview_png() {
-        let dir = std::env::temp_dir().join(format!("rimtui-preview-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rimdeck-preview-{}", std::process::id()));
         let about = dir.join("About");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&about).unwrap();

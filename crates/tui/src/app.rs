@@ -20,12 +20,12 @@ use ratatui::Terminal;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 
-use rimtui_core::github::GithubModEntry;
-use rimtui_core::gitmod::{self, GitModInfo};
-use rimtui_core::model::Mod;
-use rimtui_core::session::{self, Session};
-use rimtui_core::settings::{Settings, SettingsField};
-use rimtui_core::workshop::WorkshopItem;
+use rimdeck_core::github::GithubModEntry;
+use rimdeck_core::gitmod::{self, GitModInfo};
+use rimdeck_core::model::Mod;
+use rimdeck_core::session::{self, Session};
+use rimdeck_core::settings::{Settings, SettingsField};
+use rimdeck_core::workshop::WorkshopItem;
 
 use crate::fs_browser::FileBrowser;
 use crate::preview;

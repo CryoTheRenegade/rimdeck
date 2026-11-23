@@ -1,8 +1,8 @@
-# rimtui
+# rimdeck
 
 A RimWorld mod manager written in Rust, with a desktop GUI ([iced](https://iced.rs/)) and a terminal UI ([ratatui](https://ratatui.rs/)) built on one shared core.
 
-rimtui is a clone of [RimSort](https://github.com/RimSort/RimSort): scan local, DLC, and Steam Workshop mods, sort load order, surface dependency issues, and write `ModsConfig.xml`. The goal is full RimSort feature parity, with the TUI as usable as the GUI.
+rimdeck is a clone of [RimSort](https://github.com/RimSort/RimSort): scan local, DLC, and Steam Workshop mods, sort load order, surface dependency issues, and write `ModsConfig.xml`. The goal is full RimSort feature parity, with the TUI as usable as the GUI.
 
 This project is licensed under the GNU General Public License v3.0 only, the same license as RimSort. Sort tiers, load-order graphs, and metadata shapes follow RimSort’s implementation (rewritten in Rust, not vendored Python).
 
@@ -16,23 +16,23 @@ Both frontends also have: a per-mod rule editor (user loadAfter/loadBefore/loadT
 
 Texture optimization (RimSort's todds feature) uses [ddsify](https://crates.io/crates/ddsify): `Textures` PNGs in active non-DLC mods become BC1/BC7 DDS with mipmaps, re-encoded only when the PNG is newer. "Delete DDS" removes DDS files that sit next to a PNG.
 
-`rimtui build-db [--out PATH] [--no-deps]` merges installed mods into `steamDB.json` (with a Steam WebAPI key it also fetches Workshop "required items" as dependencies).
+`rimdeck-tui build-db [--out PATH] [--no-deps]` merges installed mods into `steamDB.json` (with a Steam WebAPI key it also fetches Workshop "required items" as dependencies).
 
 ## Layout
 
 | Crate | Path | What |
 | --- | --- | --- |
-| `rimtui-core` | `crates/core` | All domain logic plus `session::Session`: mod lists, rules, DBs, and background workers. No UI code. |
-| `rimtui` | `crates/tui` | Terminal frontend (ratatui). |
-| `rimtui-gui` | `crates/gui` | Desktop frontend (iced). |
+| `rimdeck-core` | `crates/core` | All domain logic plus `session::Session`: mod lists, rules, DBs, and background workers. No UI code. |
+| `rimdeck-tui` | `crates/tui` | Terminal frontend (ratatui). |
+| `rimdeck` | `crates/gui` | Desktop frontend (iced). |
 
 Both frontends own a `Session`, call `poll()` on a timer, and pass explicit targets (paths, package IDs). Selection and widgets stay in the frontend. Settings and databases are shared, so either UI can be used on the same setup.
 
 ## Build
 
 ```bash
-cargo run --release -p rimtui-gui   # desktop GUI
-cargo run --release -p rimtui       # terminal UI
+cargo run --release -p rimdeck   # desktop GUI
+cargo run --release -p rimdeck-tui  # terminal UI
 cargo test --workspace
 ```
 
@@ -71,13 +71,13 @@ Keyboard: ↑/↓ select, Ctrl+↑/↓ move the selected active mod, Enter activ
 | `?` | Help |
 | `q` | Quit |
 
-Databases are **not** shipped in this repo. Press `d` to fetch RimSort's community rules and Steam Workshop DB into `%APPDATA%\rimtui\config\` (or the platform config dir). Missing files are also fetched on startup. Default URLs are GitHub zip archives; change them in path settings.
+Databases are **not** shipped in this repo. Press `d` to fetch RimSort's community rules and Steam Workshop DB into `%APPDATA%\rimdeck\rimdeck\config\` (or the platform config dir). Missing files are also fetched on startup. Default URLs are GitHub zip archives; change them in path settings.
 
 User rules are written to `userRules.json` in the same folder. Alphabetical sort is RimPy-style (name order with dependencies inserted) and is optional; topological remains the default.
 
 Workshop search (`n`) uses the Steam WebAPI. Put a key in settings or the `STEAM_WEB_API_KEY` / `RIMSORT_STEAM_API_KEY` environment variable (never commit it). Searching by published file ID works without a key. Enter queues a SteamCMD download and activates the mod after rescan; Space downloads only.
 
-SteamCMD (`u`, or from workshop results) uses `+workshop_download_item 294100 <id> validate` like RimSort. The executable is auto-detected, overridable in settings, and downloaded into `%APPDATA%\rimtui\config\steamcmd\` on first use if missing.
+SteamCMD (`u`, or from workshop results) uses `+workshop_download_item 294100 <id> validate` like RimSort. The executable is auto-detected, overridable in settings, and downloaded into `%APPDATA%\rimdeck\rimdeck\config\steamcmd\` on first use if missing.
 
 GitHub mods (`h`) install release zips into the local Mods folder. Paste `owner/repo` or a `github.com` URL (optional `/releases/tag/v1.2.3`). Tracking is stored in `github_mods.json`; release metadata is cached in `github_releases.json`. A GitHub token in settings (or `GITHUB_TOKEN` / `RIMSORT_GITHUB_TOKEN`) is optional and never written to logs. Enter/u updates the selected tracked mod; `c` checks for updates; `a` toggles auto-update (also runs on startup); `X` deletes the mod files and tracking. `u` on the main list updates a GitHub-tracked mod from GitHub instead of SteamCMD.
 
@@ -85,7 +85,7 @@ Git mods (`G`) clone and `git pull --ff-only` HEAD, matching RimSort’s “Add 
 
 ## Paths
 
-Settings are stored in the platform config directory (on Windows: `%APPDATA%\rimtui\config\settings.toml`). Game, workshop, and config folders are auto-detected from Steam when possible.
+Settings are stored in the platform config directory (on Windows: `%APPDATA%\rimdeck\rimdeck\config\settings.toml`). Game, workshop, and config folders are auto-detected from Steam when possible.
 
 ## Credits
 
