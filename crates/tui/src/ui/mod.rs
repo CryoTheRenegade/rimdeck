@@ -27,6 +27,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             draw_main(frame, app);
             draw_github(frame, app);
         }
+        Screen::Updates => {
+            draw_main(frame, app);
+            draw_updates(frame, app);
+        }
         Screen::Git => {
             draw_main(frame, app);
             draw_git(frame, app);
@@ -497,6 +501,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("n", "workshop"),
     ("h", "github"),
     ("G", "git"),
+    ("U", "updates"),
     ("u", "steamcmd"),
     ("r", "rescan"),
     ("/", "search"),
@@ -811,6 +816,75 @@ fn draw_workshop(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(list, chunks[1], &mut app.workshop_state);
 }
 
+fn draw_updates(frame: &mut Frame, app: &mut App) {
+    let height = (frame.area().height.saturating_mul(80) / 100).clamp(14, frame.area().height);
+    let area = centered(frame.area(), 84, height);
+    frame.render_widget(Clear, area);
+    let outer = pane(title("Workshop updates", String::new()), true);
+    let inner = outer.inner(area);
+    frame.render_widget(outer, area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(3)])
+        .split(inner);
+
+    let backend = app.settings.steam_backend;
+    let summary = match (app.updates_checked, app.workshop_updates.len()) {
+        (false, _) => "Not checked yet".to_string(),
+        (true, 0) => "All Workshop mods are up to date".to_string(),
+        (true, n) => format!("{} have updates", plural(n, "mod")),
+    };
+    let header = vec![
+        Line::from(vec![
+            Span::styled("Workshop via ", DIM),
+            Span::styled(backend.label(), Style::new().add_modifier(Modifier::BOLD)),
+            Span::styled("  (b switches)   ", DIM),
+            Span::raw(summary),
+        ]),
+        Line::from(vec![
+            Span::styled("c", KEY_STYLE),
+            Span::styled(" check  ", LABEL_STYLE),
+            Span::styled("Enter/u", KEY_STYLE),
+            Span::styled(" update  ", LABEL_STYLE),
+            Span::styled("A", KEY_STYLE),
+            Span::styled(" update all  ", LABEL_STYLE),
+            Span::styled("o", KEY_STYLE),
+            Span::styled(" open in Steam  ", LABEL_STYLE),
+            Span::styled("X X", KEY_STYLE),
+            Span::styled(" unsubscribe  ", LABEL_STYLE),
+            Span::styled("Esc", KEY_STYLE),
+            Span::styled(" close", LABEL_STYLE),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(header).wrap(Wrap { trim: false }), chunks[0]);
+
+    let items: Vec<ListItem> = app
+        .workshop_updates
+        .iter()
+        .map(|u| {
+            ListItem::new(Line::from(vec![
+                Span::raw(u.name.clone()),
+                Span::styled(
+                    format!(
+                        "  Steam {}  yours {}",
+                        rimdeck_core::steam::ymd(u.remote),
+                        rimdeck_core::steam::ymd(u.local)
+                    ),
+                    DIM,
+                ),
+            ]))
+        })
+        .collect();
+    let list = List::new(items)
+        .highlight_style(Style::new().bg(SELECTED).fg(PARCHMENT))
+        .highlight_symbol("▌");
+    let len = app.workshop_updates.len();
+    app.updates_selected = app.updates_selected.min(len.saturating_sub(1));
+    app.updates_state
+        .select((len > 0).then_some(app.updates_selected));
+    frame.render_stateful_widget(list, chunks[1], &mut app.updates_state);
+}
+
 fn draw_github(frame: &mut Frame, app: &mut App) {
     let height = (frame.area().height.saturating_mul(80) / 100).clamp(16, frame.area().height);
     let area = centered(frame.area(), 84, height);
@@ -1080,6 +1154,9 @@ rimdeck — RimSort-style RimWorld mod manager
   n               workshop search (Steam WebAPI)
   h               GitHub release mods (track, update)
   G               git clone / pull HEAD (GitLab, GitGud, Forgejo, …)
+  U               Workshop updates: check, update, open in Steam, switch backend
+  W               open the selected mod's Workshop page in Steam
+  X X             unsubscribe from the selected mod (Steam app backend)
   u               SteamCMD, GitHub, or git pull selected mod
   t / b           user loadTop / loadBottom (saved)
   R               user loadAfter / loadBefore rule for selected mod

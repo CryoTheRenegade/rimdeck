@@ -2,9 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use iced::widget::{button, column, container, row, scrollable, space, text, text_input, toggler};
+use iced::widget::{
+    button, column, container, pick_list, row, scrollable, space, text, text_input, toggler,
+};
 use iced::{Alignment, Element, Length};
 
+use rimdeck_core::settings::SteamBackend;
+use rimdeck_core::steam::ymd;
 use rimdeck_core::workshop::format_subs;
 
 use crate::theme::{self, DUST as DIM_COLOR, OCHRE as WARN_COLOR};
@@ -22,6 +26,18 @@ impl Gui {
                 title,
                 activate,
             } => s.download_workshop(&id, &title, activate),
+            Message::SteamBackend(backend) => s.set_steam_backend(backend),
+            Message::CheckUpdates => s.check_workshop_updates(),
+            Message::UpdateAllOutdated => s.update_all_outdated(),
+            Message::UpdateWorkshop(id) => s.update_workshop_items(vec![id]),
+            Message::OpenInSteam(id) => s.open_in_steam(&id),
+            Message::Unsubscribe { path, .. } if self.confirm_delete.as_ref() != Some(&path) => {
+                self.confirm_delete = Some(path);
+            }
+            Message::Unsubscribe { id, .. } => {
+                self.confirm_delete = None;
+                s.unsubscribe_workshop(vec![id]);
+            }
             Message::GithubQuery(q) => self.github_query = q,
             Message::GithubInstall => s.github_install(&self.github_query),
             Message::GithubCheck => s.github_check(true),
@@ -68,7 +84,27 @@ impl Gui {
                 .style(theme::quiet),
         ]
         .spacing(8);
-        let mut page = column![search].spacing(8).padding(12);
+        let steamworks = s.settings.steam_backend == SteamBackend::Steamworks;
+        let backend = row![
+            text("Workshop via").size(14).color(DIM_COLOR),
+            pick_list(
+                &SteamBackend::ALL[..],
+                Some(s.settings.steam_backend),
+                Message::SteamBackend
+            ),
+            text(if steamworks {
+                "Uses your Steam app and account (Steam must be running). Can subscribe and unsubscribe."
+            } else {
+                "Works without the Steam app. Downloads into your Workshop folder; can't subscribe."
+            })
+            .size(13)
+            .color(DIM_COLOR),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+        let mut page = column![backend, self.updates_section(), search]
+            .spacing(10)
+            .padding(12);
         if s.settings.resolved_steam_api_key().is_empty() {
             page = page.push(
                 text("Searching by name needs a Steam WebAPI key (add one in Settings). Published file IDs and collection URLs work without one.")
@@ -83,19 +119,23 @@ impl Gui {
                 title: item.title.clone(),
                 activate,
             };
+            let (get, get_and_activate) = if steamworks {
+                ("Subscribe", "Subscribe and activate")
+            } else {
+                ("Download", "Download and activate")
+            };
             let mut actions = row![].spacing(6);
-            if !installed {
+            if installed {
                 actions = actions.push(
-                    button("Download and activate")
-                        .on_press(download(true))
-                        .style(theme::primary),
+                    button("Redownload")
+                        .on_press(Message::UpdateWorkshop(item.published_file_id.clone()))
+                        .style(theme::quiet),
                 );
+            } else {
+                actions = actions
+                    .push(button(get_and_activate).on_press(download(true)).style(theme::primary))
+                    .push(button(get).on_press(download(false)).style(theme::quiet));
             }
-            actions = actions.push(
-                button(if installed { "Redownload" } else { "Download" })
-                    .on_press(download(false))
-                    .style(theme::quiet),
-            );
             item_row(
                 column![
                     text(&item.title).size(15),
@@ -246,6 +286,82 @@ impl Gui {
         .padding(12)
         .height(Length::Fill)
         .into()
+    }
+
+    /// Update check results: Workshop mods with a newer version on Steam.
+    fn updates_section(&self) -> Element<'_, Message> {
+        let s = &self.session;
+        let summary = match (s.updates_checked, s.workshop_updates.len()) {
+            (false, _) => "Not checked yet".to_string(),
+            (true, 0) => "All Workshop mods are up to date".to_string(),
+            (true, 1) => "1 mod has an update".to_string(),
+            (true, n) => format!("{n} mods have updates"),
+        };
+        let mut header = row![
+            text("Updates").size(17).font(theme::SEMIBOLD),
+            text(summary).size(13).color(DIM_COLOR),
+            space::horizontal(),
+            button("Check for updates")
+                .on_press(Message::CheckUpdates)
+                .style(theme::quiet),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+        if !s.workshop_updates.is_empty() {
+            header = header.push(
+                button("Update all")
+                    .on_press(Message::UpdateAllOutdated)
+                    .style(theme::primary),
+            );
+        }
+        if s.workshop_updates.is_empty() {
+            return header.into();
+        }
+        let steamworks = s.settings.steam_backend == SteamBackend::Steamworks;
+        let rows = s.workshop_updates.iter().map(|u| {
+            let mut actions = row![
+                button("Update")
+                    .on_press(Message::UpdateWorkshop(u.published_file_id.clone()))
+                    .style(theme::quiet),
+                button("Open in Steam")
+                    .on_press(Message::OpenInSteam(u.published_file_id.clone()))
+                    .style(theme::subtle),
+            ]
+            .spacing(6);
+            if steamworks {
+                actions = actions.push(self.unsubscribe_button(&u.published_file_id, &u.path));
+            }
+            item_row(
+                column![
+                    text(&u.name).size(15),
+                    text(format!(
+                        "Updated on Steam {}, your copy is from {}",
+                        ymd(u.remote),
+                        ymd(u.local)
+                    ))
+                    .size(12)
+                    .color(DIM_COLOR),
+                ],
+                actions,
+            )
+        });
+        column![
+            header,
+            container(scrollable(column(rows).spacing(6))).max_height(260),
+        ]
+        .spacing(8)
+        .into()
+    }
+
+    pub(crate) fn unsubscribe_button<'a>(&self, id: &str, path: &Path) -> Element<'a, Message> {
+        let armed = self.confirm_delete.as_deref() == Some(path);
+        button(if armed { "Confirm unsubscribe" } else { "Unsubscribe" })
+            .on_press(Message::Unsubscribe {
+                id: id.to_string(),
+                path: path.to_path_buf(),
+            })
+            .style(theme::danger)
+            .into()
     }
 
     fn delete_button<'a>(

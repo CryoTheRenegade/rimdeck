@@ -20,7 +20,7 @@ use iced::{Alignment, Element, Length, Subscription, Task};
 use rimdeck_core::issues::Severity;
 use rimdeck_core::model::{Mod, ModSource};
 use rimdeck_core::session::{self, Session};
-use rimdeck_core::settings::{Settings, SettingsField, SortMode};
+use rimdeck_core::settings::{Settings, SettingsField, SortMode, SteamBackend};
 
 const INACTIVE_LIST: &str = "inactive-list";
 const ACTIVE_LIST: &str = "active-list";
@@ -163,6 +163,16 @@ enum Message {
     WorkshopQuery(String),
     WorkshopSearch,
     WorkshopCollection,
+    SteamBackend(SteamBackend),
+    CheckUpdates,
+    UpdateAllOutdated,
+    UpdateWorkshop(String),
+    OpenInSteam(String),
+    /// First press arms (keyed by the mod folder), second unsubscribes.
+    Unsubscribe {
+        id: String,
+        path: PathBuf,
+    },
     WorkshopDownload {
         id: String,
         title: String,
@@ -922,6 +932,16 @@ impl Gui {
             ]
             .spacing(8),
         );
+        if let Some(pfid) = &m.published_file_id {
+            let mut steam_row = row![button("Open in Steam")
+                .on_press(Message::OpenInSteam(pfid.clone()))
+                .style(theme::subtle)]
+            .spacing(8);
+            if s.settings.steam_backend == SteamBackend::Steamworks {
+                steam_row = steam_row.push(self.unsubscribe_button(pfid, &m.path));
+            }
+            col = col.push(steam_row);
+        }
         col = col.push(self.rules_editor(m));
         if !m.description.is_empty() {
             col = col
@@ -1132,6 +1152,19 @@ impl Gui {
                 .align_y(Alignment::Center),
             );
         }
+        form = form.push(
+            row![
+                text("Workshop via").size(14).color(theme::DUST).width(150),
+                pick_list(
+                    &SteamBackend::ALL[..],
+                    Some(s.settings.steam_backend),
+                    Message::SteamBackend
+                ),
+                text("Applies right away").size(12).color(theme::DUST),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
         let mut actions = row![button("Save settings")
             .on_press(Message::SaveSettings)
             .style(theme::primary)]

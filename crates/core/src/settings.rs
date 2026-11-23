@@ -43,6 +43,34 @@ impl SortMode {
     }
 }
 
+/// How Workshop mods are downloaded, updated and (un)subscribed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SteamBackend {
+    /// SteamCMD: works without the Steam app; cannot subscribe or unsubscribe.
+    #[default]
+    SteamCmd,
+    /// The running Steam app, through the Steamworks API in the `rimdeck-steam` helper.
+    Steamworks,
+}
+
+impl std::fmt::Display for SteamBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+impl SteamBackend {
+    pub const ALL: [SteamBackend; 2] = [Self::SteamCmd, Self::Steamworks];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SteamCmd => "SteamCMD",
+            Self::Steamworks => "Steam app",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -62,6 +90,8 @@ pub struct Settings {
     /// Override path to `steamcmd.exe` / `steamcmd.sh`. Empty means auto-detect.
     #[serde(default)]
     pub steamcmd_path: PathBuf,
+    #[serde(default)]
+    pub steam_backend: SteamBackend,
     /// Steam WebAPI key for workshop search. Prefer env `STEAM_WEB_API_KEY` if empty.
     #[serde(default)]
     pub steam_api_key: String,
@@ -104,6 +134,7 @@ impl Default for Settings {
             steam_db_url: default_steam_db_url(),
             sort_mode: SortMode::Topological,
             steamcmd_path: PathBuf::new(),
+            steam_backend: SteamBackend::default(),
             steam_api_key: String::new(),
             github_token: String::new(),
             instance: String::new(),
@@ -317,6 +348,7 @@ impl Settings {
             SettingsField::CommunityRulesUrl => self.community_rules_url.clone(),
             SettingsField::SteamDbUrl => self.steam_db_url.clone(),
             SettingsField::SortMode => self.sort_mode.label().to_string(),
+            SettingsField::SteamBackend => self.steam_backend.label().to_string(),
             SettingsField::SteamCmdPath => {
                 if !self.steamcmd_path.as_os_str().is_empty() {
                     self.steamcmd_path.display().to_string()
@@ -365,7 +397,7 @@ impl Settings {
             SettingsField::ConfigDir => self.config_dir = PathBuf::from(value),
             SettingsField::CommunityRulesUrl => self.community_rules_url = value.to_string(),
             SettingsField::SteamDbUrl => self.steam_db_url = value.to_string(),
-            SettingsField::SortMode => {}
+            SettingsField::SortMode | SettingsField::SteamBackend => {}
             SettingsField::SteamCmdPath => self.steamcmd_path = PathBuf::from(value),
             SettingsField::SteamApiKey => self.steam_api_key = value.to_string(),
             SettingsField::GithubToken => self.github_token = value.to_string(),
@@ -373,8 +405,15 @@ impl Settings {
     }
 
     pub fn cycle_field(&mut self, field: SettingsField) {
-        if field == SettingsField::SortMode {
-            self.sort_mode = self.sort_mode.toggle();
+        match field {
+            SettingsField::SortMode => self.sort_mode = self.sort_mode.toggle(),
+            SettingsField::SteamBackend => {
+                self.steam_backend = match self.steam_backend {
+                    SteamBackend::SteamCmd => SteamBackend::Steamworks,
+                    SteamBackend::Steamworks => SteamBackend::SteamCmd,
+                }
+            }
+            _ => {}
         }
     }
 
@@ -411,13 +450,14 @@ pub enum SettingsField {
     CommunityRulesUrl,
     SteamDbUrl,
     SortMode,
+    SteamBackend,
     SteamCmdPath,
     SteamApiKey,
     GithubToken,
 }
 
 impl SettingsField {
-    pub const ALL: [SettingsField; 11] = [
+    pub const ALL: [SettingsField; 12] = [
         Self::Instance,
         Self::GameInstall,
         Self::LocalMods,
@@ -426,6 +466,7 @@ impl SettingsField {
         Self::CommunityRulesUrl,
         Self::SteamDbUrl,
         Self::SortMode,
+        Self::SteamBackend,
         Self::SteamCmdPath,
         Self::SteamApiKey,
         Self::GithubToken,
@@ -441,6 +482,7 @@ impl SettingsField {
             Self::CommunityRulesUrl => "Rules URL",
             Self::SteamDbUrl => "Steam DB URL",
             Self::SortMode => "Sort mode",
+            Self::SteamBackend => "Workshop via",
             Self::SteamCmdPath => "SteamCMD",
             Self::SteamApiKey => "API key",
             Self::GithubToken => "GitHub token",
@@ -448,7 +490,7 @@ impl SettingsField {
     }
 
     pub fn is_cycle(self) -> bool {
-        matches!(self, Self::SortMode)
+        matches!(self, Self::SortMode | Self::SteamBackend)
     }
 
     pub fn next(self) -> Self {

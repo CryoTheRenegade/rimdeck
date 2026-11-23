@@ -18,6 +18,7 @@ pub mod scan;
 pub mod session;
 pub mod settings;
 pub mod sort;
+pub mod steam;
 pub mod steamcmd;
 pub mod steamdb;
 pub mod workshop;

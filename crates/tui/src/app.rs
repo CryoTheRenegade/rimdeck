@@ -45,6 +45,7 @@ pub enum Screen {
     Workshop,
     Github,
     Git,
+    Updates,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +110,10 @@ pub struct App {
     pub workshop_selected: usize,
     pub workshop_state: ListState,
     pub workshop_area: Rect,
+    pub updates_selected: usize,
+    pub updates_state: ListState,
+    /// Workshop ID armed by a first `X`; a second `X` on the same mod unsubscribes.
+    confirm_unsubscribe: Option<String>,
     pub github_query: String,
     pub github_selected: usize,
     pub github_state: ListState,
@@ -189,6 +194,9 @@ impl App {
             workshop_selected: 0,
             workshop_state: ListState::default(),
             workshop_area: Rect::default(),
+            updates_selected: 0,
+            updates_state: ListState::default(),
+            confirm_unsubscribe: None,
             github_query: String::new(),
             github_selected: 0,
             github_state: ListState::default(),
@@ -668,10 +676,12 @@ impl App {
                 self.screen == Screen::Workshop && self.input_mode == InputMode::Normal;
             let github = self.screen == Screen::Github && self.input_mode == InputMode::Normal;
             let git = self.screen == Screen::Git && self.input_mode == InputMode::Normal;
+            let updates = self.screen == Screen::Updates;
             if !explorer
                 && !workshop
                 && !github
                 && !git
+                && !updates
                 && (self.input_mode != InputMode::Normal || self.screen != Screen::Main)
             {
                 return;
@@ -716,6 +726,7 @@ impl App {
                 Screen::Workshop => self.handle_workshop_list_key(key),
                 Screen::Github => self.handle_github_list_key(key),
                 Screen::Git => self.handle_git_list_key(key),
+                Screen::Updates => self.handle_updates_key(key),
                 Screen::Main => self.handle_main_key(key),
             },
         }
@@ -951,6 +962,7 @@ impl App {
 
     fn handle_main_key(&mut self, key: KeyEvent) {
         let refresh_armed = std::mem::take(&mut self.confirm_refresh);
+        let unsubscribe_armed = std::mem::take(&mut self.confirm_unsubscribe);
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('j') => self.reorder_active(1),
@@ -992,6 +1004,17 @@ impl App {
             KeyCode::Char('n') => self.open_workshop_search(),
             KeyCode::Char('h') => self.open_github(),
             KeyCode::Char('G') => self.open_git(),
+            KeyCode::Char('U') => self.open_updates(),
+            KeyCode::Char('W') => match self.selected_mod().and_then(|m| m.published_file_id.clone()) {
+                Some(id) => self.session.open_in_steam(&id),
+                None => self.session.status = "Selected mod is not from the Workshop".into(),
+            },
+            KeyCode::Char('X') => {
+                let target = self
+                    .selected_mod()
+                    .and_then(|m| Some((m.published_file_id.clone()?, m.name.clone())));
+                self.unsubscribe_key(target, unsubscribe_armed);
+            }
             KeyCode::Char('u') => self.update_selected_mod(),
             KeyCode::Char('r') if self.session.dirty && !refresh_armed => {
                 self.confirm_refresh = true;
@@ -1121,6 +1144,80 @@ impl App {
             KeyCode::Char(c) => self.github_query.push(c),
             _ => {}
         }
+    }
+
+    // ---- Workshop updates overlay -------------------------------------------
+
+    fn open_updates(&mut self) {
+        self.screen = Screen::Updates;
+        self.input_mode = InputMode::Normal;
+        if self.session.updates_checked {
+            let len = self.session.workshop_updates.len();
+            clamp_list(&mut self.updates_selected, &mut self.updates_state, len);
+        } else {
+            self.session.check_workshop_updates();
+        }
+    }
+
+    fn selected_update(&self) -> Option<(String, String)> {
+        let u = self.session.workshop_updates.get(self.updates_selected)?;
+        Some((u.published_file_id.clone(), u.name.clone()))
+    }
+
+    /// `X` twice on the same mod unsubscribes it (Steam app backend; Steam deletes the files).
+    fn unsubscribe_key(&mut self, target: Option<(String, String)>, armed: Option<String>) {
+        let Some((id, name)) = target else {
+            self.session.status = "Selected mod is not from the Workshop".into();
+            return;
+        };
+        if self.session.settings.steam_backend != rimdeck_core::settings::SteamBackend::Steamworks {
+            self.session.unsubscribe_workshop(vec![id]); // explains the backend requirement
+        } else if armed.as_deref() == Some(id.as_str()) {
+            self.session.unsubscribe_workshop(vec![id]);
+        } else {
+            self.session.status =
+                format!("Press X again to unsubscribe from {name} (Steam removes its files)");
+            self.confirm_unsubscribe = Some(id);
+        }
+    }
+
+    fn handle_updates_key(&mut self, key: KeyEvent) {
+        let unsubscribe_armed = std::mem::take(&mut self.confirm_unsubscribe);
+        let len = self.session.workshop_updates.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.screen = Screen::Main,
+            KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                self.updates_selected = (self.updates_selected + 1) % len;
+            }
+            KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                self.updates_selected = (self.updates_selected + len - 1) % len;
+            }
+            KeyCode::Char('c') => self.session.check_workshop_updates(),
+            KeyCode::Char('A') => self.session.update_all_outdated(),
+            KeyCode::Char('b') => {
+                self.session
+                    .settings
+                    .cycle_field(rimdeck_core::settings::SettingsField::SteamBackend);
+                let backend = self.session.settings.steam_backend;
+                self.session.set_steam_backend(backend);
+            }
+            KeyCode::Enter | KeyCode::Char('u') => {
+                if let Some((id, _)) = self.selected_update() {
+                    self.session.update_workshop_items(vec![id]);
+                }
+            }
+            KeyCode::Char('o') => {
+                if let Some((id, _)) = self.selected_update() {
+                    self.session.open_in_steam(&id);
+                }
+            }
+            KeyCode::Char('X') => {
+                let target = self.selected_update();
+                self.unsubscribe_key(target, unsubscribe_armed);
+            }
+            _ => {}
+        }
+        clamp_list(&mut self.updates_selected, &mut self.updates_state, len);
     }
 
     fn handle_github_list_key(&mut self, key: KeyEvent) {

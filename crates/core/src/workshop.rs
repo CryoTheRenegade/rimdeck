@@ -262,6 +262,50 @@ fn query_files(
     parse_query_files_json(&body)
 }
 
+/// Last update time (unix seconds) per published file ID, from Steam's public API (no key).
+pub fn time_updated(pfids: &[String]) -> Result<std::collections::HashMap<String, u64>> {
+    let client = blocking_client()?;
+    let mut out = std::collections::HashMap::new();
+    for chunk in pfids.chunks(100) {
+        let mut form = vec![("itemcount".to_string(), chunk.len().to_string())];
+        for (i, id) in chunk.iter().enumerate() {
+            form.push((format!("publishedfileids[{i}]"), id.clone()));
+        }
+        let resp = client
+            .post(GET_DETAILS_URL)
+            .form(&form)
+            .send()
+            .map_err(|e| Error::Workshop(e.to_string()))?;
+        let status = resp.status();
+        let body = resp.text().map_err(|e| Error::Workshop(e.to_string()))?;
+        if !status.is_success() {
+            return Err(Error::Workshop(format!(
+                "GetPublishedFileDetails returned HTTP {status}"
+            )));
+        }
+        out.extend(parse_time_updated_json(&body)?);
+    }
+    Ok(out)
+}
+
+/// `GetPublishedFileDetails` -> pfid -> `time_updated`; removed or hidden items are skipped.
+pub fn parse_time_updated_json(text: &str) -> Result<std::collections::HashMap<String, u64>> {
+    let value: Value = serde_json::from_str(text)
+        .map_err(|e| Error::Workshop(format!("GetPublishedFileDetails JSON: {e}")))?;
+    let mut out = std::collections::HashMap::new();
+    for item in publishedfiledetails(&value).into_iter().flatten() {
+        if item.get("result").and_then(Value::as_u64) != Some(1) {
+            continue;
+        }
+        let id = item.get("publishedfileid").and_then(json_id);
+        let time = item.get("time_updated").and_then(Value::as_u64);
+        if let (Some(id), Some(time)) = (id, time) {
+            out.insert(id, time);
+        }
+    }
+    Ok(out)
+}
+
 fn get_details(
     client: &reqwest::blocking::Client,
     published_file_id: &str,
@@ -541,5 +585,15 @@ mod tests {
         let map = parse_children_json(json).unwrap();
         assert_eq!(map["200"], vec!["100"]);
         assert!(map["300"].is_empty());
+    }
+
+    #[test]
+    fn parses_time_updated_and_skips_missing_items() {
+        let json = r#"{"response":{"publishedfiledetails":[
+            {"publishedfileid":"100","result":1,"time_updated":1700000000},
+            {"publishedfileid":"200","result":9}]}}"#;
+        let map = parse_time_updated_json(json).unwrap();
+        assert_eq!(map.get("100"), Some(&1700000000));
+        assert!(!map.contains_key("200"));
     }
 }

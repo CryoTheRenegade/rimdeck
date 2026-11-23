@@ -23,7 +23,8 @@ use crate::lists;
 use crate::model::{resolve_mod, Mod, ModSource};
 use crate::rules::{self, RulesDb};
 use crate::scan::scan_mods;
-use crate::settings::{Settings, SortMode};
+use crate::settings::{Settings, SortMode, SteamBackend};
+use crate::steam::{self, HelperAction, HelperMsg, WorkshopUpdate};
 use crate::sort::{sort_active, sort_active_alphabetical};
 use crate::steamcmd::{self, SteamcmdItem, SteamcmdMsg, SteamcmdRequest};
 use crate::steamdb::{self, SteamDb};
@@ -85,6 +86,12 @@ pub struct Session {
     git_rx: Option<Receiver<GitMsg>>,
     dbbuild_rx: Option<Receiver<std::result::Result<String, String>>>,
     textures_rx: Option<Receiver<TextureMsg>>,
+    updates_rx: Option<Receiver<std::result::Result<Vec<WorkshopUpdate>, String>>>,
+    /// Workshop mods with a newer version on Steam, from the last update check.
+    pub workshop_updates: Vec<WorkshopUpdate>,
+    /// An update check has finished at least once, so an empty list means "all current".
+    pub updates_checked: bool,
+    helper_rx: Option<Receiver<HelperMsg>>,
     /// Paths the current mod list was scanned from; Save is refused if settings moved away.
     loaded_paths: Option<ScanPaths>,
     pending_git: Vec<GitJob>,
@@ -209,6 +216,10 @@ impl Session {
             pending_activate: Vec::new(),
             dbbuild_rx: None,
             textures_rx: None,
+            updates_rx: None,
+            workshop_updates: Vec::new(),
+            updates_checked: false,
+            helper_rx: None,
             pending_path_activate: HashSet::new(),
             github_rx: None,
             pending_github: Vec::new(),
@@ -241,6 +252,8 @@ impl Session {
             || self.git_rx.is_some()
             || self.dbbuild_rx.is_some()
             || self.textures_rx.is_some()
+            || self.updates_rx.is_some()
+            || self.helper_rx.is_some()
     }
 
     pub fn steamcmd_running(&self) -> bool {
@@ -262,6 +275,8 @@ impl Session {
         self.poll_git(&mut events);
         self.poll_dbbuild();
         self.poll_textures();
+        self.poll_updates();
+        self.poll_helper();
         events
     }
 
@@ -1017,17 +1032,20 @@ impl Session {
         if activated > 0 {
             self.mark_changed(&msg);
         }
-        self.enqueue_steamcmd(missing);
+        self.workshop_fetch(missing, false);
         self.status = msg;
     }
 
     /// Queue a SteamCMD download; `activate` enables the mod after the next rescan.
     pub fn download_workshop(&mut self, published_file_id: &str, title: &str, activate: bool) {
         let already = self.steamcmd_running();
-        self.enqueue_steamcmd(vec![SteamcmdItem {
-            published_file_id: published_file_id.to_string(),
-            activate,
-        }]);
+        self.workshop_fetch(
+            vec![SteamcmdItem {
+                published_file_id: published_file_id.to_string(),
+                activate,
+            }],
+            false,
+        );
         if already {
             self.status = if activate {
                 format!("Queued {title} (will activate after download)")
@@ -1066,13 +1084,187 @@ impl Session {
             .map(|m| m.name.clone())
             .unwrap_or_else(|| pfid.clone());
         let already = self.steamcmd_running();
-        self.enqueue_steamcmd(vec![SteamcmdItem {
-            published_file_id: pfid,
-            activate: false,
-        }]);
+        self.workshop_fetch(
+            vec![SteamcmdItem {
+                published_file_id: pfid,
+                activate: false,
+            }],
+            true,
+        );
         if already {
             self.status = format!("Queued SteamCMD update for {name}");
         }
+    }
+
+    /// Download (new) or update Workshop items with the backend chosen in settings.
+    fn workshop_fetch(&mut self, items: Vec<SteamcmdItem>, update: bool) {
+        if items.is_empty() {
+            return;
+        }
+        match self.settings.steam_backend {
+            SteamBackend::SteamCmd => self.enqueue_steamcmd(items),
+            SteamBackend::Steamworks => {
+                for item in items.iter().filter(|i| i.activate) {
+                    if !self.pending_activate.contains(&item.published_file_id) {
+                        self.pending_activate.push(item.published_file_id.clone());
+                    }
+                }
+                let action = if update {
+                    HelperAction::Download
+                } else {
+                    HelperAction::Subscribe
+                };
+                let ids = items.into_iter().map(|i| i.published_file_id).collect();
+                self.run_helper(action, ids);
+            }
+        }
+    }
+
+    // ---- Steam app (Steamworks helper) and update checks ----------------------
+
+    /// Compare every Workshop mod with Steam (public API, no key) in the background.
+    pub fn check_workshop_updates(&mut self) {
+        if self.updates_rx.is_some() {
+            self.status = "Already checking for Workshop updates".into();
+            return;
+        }
+        let mods: Vec<(String, String, PathBuf)> = self
+            .mods
+            .iter()
+            .filter(|m| m.source == ModSource::Workshop)
+            .filter_map(|m| Some((m.published_file_id.clone()?, m.name.clone(), m.path.clone())))
+            .collect();
+        if mods.is_empty() {
+            self.status = "No Workshop mods to check".into();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let workshop = self.settings.workshop.clone();
+        let count = mods.len();
+        match std::thread::Builder::new()
+            .name("rimdeck-updates".into())
+            .spawn(move || {
+                let _ = tx.send(steam::check_updates(&workshop, &mods).map_err(|e| e.to_string()));
+            }) {
+            Ok(_) => {
+                self.updates_rx = Some(rx);
+                self.status = format!("Checking {count} Workshop mods for updates...");
+            }
+            Err(e) => self.status = format!("Could not start update check: {e}"),
+        }
+    }
+
+    fn poll_updates(&mut self) {
+        let Some(result) = try_take(&self.updates_rx) else {
+            return;
+        };
+        self.updates_rx = None;
+        match result {
+            Ok(Ok(list)) => {
+                self.updates_checked = true;
+                self.status = match list.len() {
+                    0 => "All Workshop mods are up to date".into(),
+                    n => format!("{n} Workshop mod(s) have updates"),
+                };
+                self.workshop_updates = list;
+            }
+            Ok(Err(e)) => self.status = format!("Update check failed: {e}"),
+            Err(()) => self.status = "Update check ended unexpectedly".into(),
+        }
+    }
+
+    pub fn update_workshop_items(&mut self, ids: Vec<String>) {
+        let items = ids
+            .into_iter()
+            .map(|published_file_id| SteamcmdItem {
+                published_file_id,
+                activate: false,
+            })
+            .collect();
+        self.workshop_fetch(items, true);
+    }
+
+    pub fn update_all_outdated(&mut self) {
+        let ids: Vec<String> = self
+            .workshop_updates
+            .iter()
+            .map(|u| u.published_file_id.clone())
+            .collect();
+        if ids.is_empty() {
+            self.status = "Nothing to update; check for updates first".into();
+            return;
+        }
+        self.update_workshop_items(ids);
+    }
+
+    /// Unsubscribe in the Steam app; Steam then removes the files. Steam app backend only.
+    pub fn unsubscribe_workshop(&mut self, ids: Vec<String>) {
+        if self.settings.steam_backend != SteamBackend::Steamworks {
+            self.status =
+                "Unsubscribing needs the Steam app backend (Settings: Workshop via)".into();
+            return;
+        }
+        self.run_helper(HelperAction::Unsubscribe, ids);
+    }
+
+    fn run_helper(&mut self, action: HelperAction, ids: Vec<String>) {
+        // shortcut: one helper run at a time; later requests are refused, not queued.
+        if self.helper_rx.is_some() {
+            self.status = "Steam is still busy with the last request".into();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.helper_rx = Some(rx);
+        self.status = format!("Steam: {} {} item(s)...", action.arg(), ids.len());
+        steam::spawn_helper(action, ids, tx);
+    }
+
+    fn poll_helper(&mut self) {
+        let Some(rx) = &self.helper_rx else {
+            return;
+        };
+        let done = loop {
+            match rx.try_recv() {
+                Ok(HelperMsg::Progress(p)) => self.status = p,
+                Ok(HelperMsg::Done(result)) => break result,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => break Err("helper ended unexpectedly".into()),
+            }
+        };
+        self.helper_rx = None;
+        match done {
+            Ok((ok, failed)) => {
+                for (id, _) in &failed {
+                    self.pending_activate.retain(|p| p != id);
+                }
+                let mut summary = format!("Steam: {} done, {} failed", ok.len(), failed.len());
+                if let Some((id, reason)) = failed.first() {
+                    summary.push_str(&format!(" ({id}: {reason})"));
+                }
+                self.workshop_updates
+                    .retain(|u| !ok.contains(&u.published_file_id));
+                if ok.is_empty() {
+                    self.status = summary;
+                } else {
+                    self.rescan_then(summary);
+                }
+            }
+            Err(e) => self.status = format!("Steam: {e}"),
+        }
+    }
+
+    pub fn open_in_steam(&mut self, published_file_id: &str) {
+        if let Err(e) = launch::open_url(&steam::workshop_page_url(published_file_id)) {
+            self.status = format!("Could not open Steam: {e}");
+        }
+    }
+
+    pub fn set_steam_backend(&mut self, backend: SteamBackend) {
+        self.settings.steam_backend = backend;
+        self.status = match self.settings.save() {
+            Ok(_) => format!("Workshop via: {backend}"),
+            Err(e) => format!("Workshop via: {backend} (could not save settings: {e})"),
+        };
     }
 
     fn enqueue_steamcmd(&mut self, items: Vec<SteamcmdItem>) {
@@ -1125,6 +1317,8 @@ impl Session {
                     }
                 }
                 self.steamcmd_succeeded |= report.any_success();
+                self.workshop_updates
+                    .retain(|u| !report.succeeded.contains(&u.published_file_id));
                 self.status = report.status_line();
                 if !self.pending_steamcmd.is_empty() {
                     let more = std::mem::take(&mut self.pending_steamcmd);
@@ -1849,6 +2043,25 @@ mod tests {
         assert!(msg.contains("deleted 1"), "{msg}");
         assert!(!tex.join("a.dds").exists() && tex.join("a.png").is_file());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn steam_app_backend_routes_downloads_to_the_helper() {
+        let mut s = fixture_session();
+        s.settings.steam_backend = SteamBackend::Steamworks;
+        s.download_workshop("123", "X", true);
+        assert_eq!(s.pending_activate, vec!["123".to_string()]);
+        assert!(s.helper_rx.is_some(), "SteamCMD must not be used");
+        assert!(!s.steamcmd_running());
+        // No helper beside the test binary: the run ends with a clear message.
+        for _ in 0..100 {
+            s.poll_helper();
+            if s.helper_rx.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(s.status.contains("not found"), "{}", s.status);
     }
 
     #[test]

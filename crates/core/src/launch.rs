@@ -18,7 +18,7 @@ pub fn launch_game(game_install: &Path) -> Result<LaunchKind> {
         spawn_executable(&exe, game_install)?;
         return Ok(LaunchKind::Executable(exe));
     }
-    spawn_steam_protocol()?;
+    open_url(STEAM_RUN_URL)?;
     Ok(LaunchKind::SteamProtocol)
 }
 
@@ -77,14 +77,13 @@ fn spawn_executable(exe: &Path, game_install: &Path) -> Result<()> {
     Ok(())
 }
 
-fn spawn_steam_protocol() -> Result<()> {
-    let url = format!("steam://run/{RIMWORLD_STEAM_APP_ID}");
-    debug_assert_eq!(url, STEAM_RUN_URL);
-
+/// Hand a URL (`steam://...`, `https://...`) to the OS default handler.
+pub fn open_url(url: &str) -> Result<()> {
+    debug_assert_eq!(STEAM_RUN_URL, format!("steam://run/{RIMWORLD_STEAM_APP_ID}"));
     #[cfg(windows)]
     {
         Command::new("cmd")
-            .args(["/C", "start", "", &url])
+            .args(["/C", "start", "", url])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -95,7 +94,7 @@ fn spawn_steam_protocol() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
-            .arg(&url)
+            .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -106,7 +105,7 @@ fn spawn_steam_protocol() -> Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         Command::new("xdg-open")
-            .arg(&url)
+            .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

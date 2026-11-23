@@ -1,0 +1,18 @@
+[package]
+name = "rimdeck-steam"
+description = "Steamworks helper for rimdeck: subscribe, unsubscribe, and re-download Workshop items"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+steamworks = "0.13"
+
+# Only so steamworks-sys's build script (which copies the Steam API library into its
+# OUT_DIR) is guaranteed to have run before ours; see build.rs.
+[build-dependencies]
+steamworks-sys = "0.13"
+
+[lints.cargo]
+# steamworks-sys is a build-dependency only for build-script ordering (see above).
+unused_dependencies = "allow"
