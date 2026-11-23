@@ -3,6 +3,7 @@
 //! Inspired by RimSort (https://github.com/RimSort/RimSort).
 
 pub mod constants;
+pub mod dbbuild;
 pub mod error;
 pub mod fetch;
 pub mod github;

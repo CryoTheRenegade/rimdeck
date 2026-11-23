@@ -32,6 +32,9 @@ pub enum Error {
     #[error("git failed: {0}")]
     Git(String),
 
+    #[error("steam database: {0}")]
+    SteamDb(String),
+
     #[error("circular load-order dependency involving: {0}")]
     Cycle(String),
 }

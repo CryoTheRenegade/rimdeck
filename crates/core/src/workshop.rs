@@ -13,6 +13,8 @@ const GET_DETAILS_URL: &str =
     "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/";
 const GET_COLLECTION_URL: &str =
     "https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/";
+const GET_DETAILS_V2_URL: &str =
+    "https://api.steampowered.com/IPublishedFileService/GetDetails/v1/";
 const TIMEOUT_SECS: u64 = 60;
 /// RankedByTextSearch
 const QUERY_TYPE_TEXT: u32 = 11;
@@ -122,6 +124,63 @@ pub fn parse_collection_json(text: &str) -> Result<Vec<String>> {
         .collect();
     items.sort_by_key(|(order, _)| *order);
     Ok(items.into_iter().map(|(_, id)| id).collect())
+}
+
+/// Steam "required items" (children) per published file ID, 100 IDs per request.
+pub fn required_items(
+    api_key: &str,
+    pfids: &[String],
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let client = blocking_client()?;
+    let mut out = std::collections::HashMap::new();
+    for chunk in pfids.chunks(100) {
+        let mut query: Vec<(String, String)> = vec![
+            ("key".into(), api_key.to_string()),
+            ("includechildren".into(), "true".into()),
+        ];
+        for (i, id) in chunk.iter().enumerate() {
+            query.push((format!("publishedfileids[{i}]"), id.clone()));
+        }
+        let resp = client
+            .get(GET_DETAILS_V2_URL)
+            .query(&query)
+            .send()
+            .map_err(|e| Error::Workshop(redact(&e.to_string(), api_key)))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .map_err(|e| Error::Workshop(redact(&e.to_string(), api_key)))?;
+        if !status.is_success() {
+            return Err(Error::Workshop(format!("GetDetails returned HTTP {status}")));
+        }
+        out.extend(parse_children_json(&body)?);
+    }
+    Ok(out)
+}
+
+/// `IPublishedFileService/GetDetails` with `includechildren` -> pfid -> child pfids.
+pub fn parse_children_json(
+    text: &str,
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let value: Value =
+        serde_json::from_str(text).map_err(|e| Error::Workshop(format!("GetDetails JSON: {e}")))?;
+    let mut out = std::collections::HashMap::new();
+    for item in publishedfiledetails(&value).into_iter().flatten() {
+        let Some(id) = item.get("publishedfileid").and_then(json_id) else {
+            continue;
+        };
+        let children = item
+            .get("children")
+            .and_then(Value::as_array)
+            .map(|c| {
+                c.iter()
+                    .filter_map(|c| c.get("publishedfileid").and_then(json_id))
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.insert(id, children);
+    }
+    Ok(out)
 }
 
 pub fn search(req: &SearchRequest) -> Result<Vec<WorkshopItem>> {
@@ -471,5 +530,16 @@ mod tests {
         let not_collection =
             r#"{"response":{"collectiondetails":[{"publishedfileid":"9","result":1}]}}"#;
         assert!(parse_collection_json(not_collection).is_err());
+    }
+
+    #[test]
+    fn parses_required_items() {
+        let json = r#"{"response":{"publishedfiledetails":[
+            {"publishedfileid":"200","result":1,"children":[
+                {"publishedfileid":"100","sortorder":1,"file_type":0}]},
+            {"publishedfileid":"300","result":1}]}}"#;
+        let map = parse_children_json(json).unwrap();
+        assert_eq!(map["200"], vec!["100"]);
+        assert!(map["300"].is_empty());
     }
 }
