@@ -44,38 +44,99 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
+// Same tokens as the GUI (crates/gui/src/theme.rs). Body text keeps the terminal's own color so
+// light and dark terminal themes both stay readable; tokens carry structure and meaning.
+const PARCHMENT: Color = Color::Rgb(0xE8, 0xE1, 0xCE);
+const DUST: Color = Color::Rgb(0x9A, 0xA0, 0xA3);
+const RIVET: Color = Color::Rgb(0x4A, 0x53, 0x5A);
+const PLATE: Color = Color::Rgb(0x30, 0x36, 0x3B);
+const VERDIGRIS: Color = Color::Rgb(0x6F, 0xA8, 0xA0);
+const OCHRE: Color = Color::Rgb(0xD8, 0xA2, 0x3E);
+const BRICK: Color = Color::Rgb(0xCF, 0x5A, 0x4A);
+/// Verdigris at about a third over Plate: the selected row.
+const SELECTED: Color = Color::Rgb(0x44, 0x5A, 0x5B);
+
+const DIM: Style = Style::new().fg(DUST);
+const SELECTED_STYLE: Style = Style::new().bg(SELECTED).fg(PARCHMENT);
+
+/// A pane: thin Rivet frame, or Verdigris when it has focus.
+fn pane<'a>(title: Line<'a>, focused: bool) -> Block<'a> {
+    Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(if focused { VERDIGRIS } else { RIVET }))
+}
+
+/// " Name  detail " with the name bold and the detail dim.
+fn title<'a>(name: &'a str, detail: String) -> Line<'a> {
+    Line::from(vec![
+        // Reset: the block's border color would otherwise tint the title.
+        Span::styled(
+            format!(" {name} "),
+            Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{detail} "), DIM),
+    ])
+}
+
+/// Shape and color together, so severity never depends on color alone.
+fn severity_glyph(severity: Option<Severity>) -> Span<'static> {
+    match severity {
+        Some(Severity::Error) => Span::styled("●", Style::new().fg(BRICK)),
+        Some(Severity::Warning) => Span::styled("▲", Style::new().fg(OCHRE)),
+        None => Span::raw(" "),
+    }
+}
+
+fn plural(n: usize, word: &str) -> String {
+    if n == 1 {
+        format!("1 {word}")
+    } else {
+        format!("{n} {word}s")
+    }
+}
+
 fn draw_main(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    let status = status_text(app);
-    let inner_width = area.width.saturating_sub(2).max(1);
-    let status_height = status_bar_height(&status, inner_width);
+    let footer = footer_height(
+        &format!("  Unsaved changes (w saves)  {}", app.status),
+        &help_plain(),
+        area.width,
+    );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(8),
             Constraint::Length(7),
-            Constraint::Length(status_height),
+            Constraint::Length(footer),
         ])
         .split(area);
 
     let main = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(30),
-            Constraint::Percentage(35),
-            Constraint::Percentage(35),
+            Constraint::Percentage(28),
+            Constraint::Percentage(40),
+            Constraint::Percentage(32),
         ])
         .split(chunks[0]);
 
-    draw_info(frame, app, main[0]);
-    draw_list(frame, app, main[1], Pane::Inactive);
-    draw_list(frame, app, main[2], Pane::Active);
+    draw_list(frame, app, main[0], Pane::Inactive);
+    draw_list(frame, app, main[1], Pane::Active);
+    draw_info(frame, app, main[2]);
     draw_warnings(frame, app, chunks[1]);
-    draw_status(frame, chunks[2], status_line(app));
-    app.info_area = main[0];
-    app.inactive_area = main[1];
-    app.active_area = main[2];
+    draw_footer(frame, app, chunks[2]);
+    app.inactive_area = main[0];
+    app.active_area = main[1];
+    app.info_area = main[2];
     app.issues_area = chunks[1];
+}
+
+fn field_line<'a>(label: &'a str, value: String) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(format!("{label:<14}"), DIM),
+        Span::raw(value),
+    ])
 }
 
 fn draw_info(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -93,14 +154,14 @@ fn draw_info(frame: &mut Frame, app: &mut App, area: Rect) {
             )
         };
         let latest = app.github_latest_tag(&owner_repo);
-        let mut line = format!("github: {owner_repo} @ {installed}");
+        let mut line = format!("{owner_repo} at {installed}");
         if let Some(latest) = latest {
             if latest != installed {
-                line.push_str(&format!(" (update: {latest})"));
+                line.push_str(&format!(", update {latest} available"));
             }
         }
         if auto {
-            line.push_str(" auto");
+            line.push_str(", auto-update on");
         }
         Some(line)
     });
@@ -109,105 +170,94 @@ fn draw_info(frame: &mut Frame, app: &mut App, area: Rect) {
             return None;
         }
         if let Some(info) = app.git_items.iter().find(|i| &i.path == path) {
-            let mut line = format!("git: {}", info.origin);
+            let mut line = info.origin.clone();
             if !info.branch.is_empty() {
-                line.push_str(&format!(" @ {}", info.branch));
+                line.push_str(&format!(" on {}", info.branch));
             }
             if !info.short_sha.is_empty() {
-                line.push_str(&format!(" {}", info.short_sha));
+                line.push_str(&format!(" at {}", info.short_sha));
             }
             if let Some(n) = info.behind {
                 if n > 0 {
-                    line.push_str(&format!(" ({n} behind)"));
+                    line.push_str(&format!(", {n} behind"));
                 }
             }
             return Some(line);
         }
-        rimdeck_core::gitmod::is_git_repo(path).then(|| "git: cloned repo".to_string())
+        rimdeck_core::gitmod::is_git_repo(path).then(|| "cloned repository".to_string())
     });
     if let Some(m) = app.selected_mod() {
         lines.push(Line::from(Span::styled(
             m.name.clone(),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::new().add_modifier(Modifier::BOLD),
         )));
-        lines.push(Line::from(format!("id: {}", m.package_id)));
-        lines.push(Line::from(format!("author: {}", m.author_line())));
-        lines.push(Line::from(format!("source: {}", m.source.label())));
+        lines.push(Line::from(Span::styled(m.author_line(), DIM)));
+        for issue in app.issues.iter().filter(|i| i.package_id == m.package_id) {
+            lines.push(Line::from(vec![
+                severity_glyph(Some(issue.severity)),
+                Span::raw(format!(" {}", issue.message)),
+            ]));
+        }
+        lines.push(Line::from(""));
+        lines.push(field_line("Package ID", m.package_id.clone()));
+        lines.push(field_line("Source", m.source.label().to_string()));
         if !m.mod_version.is_empty() {
-            lines.push(Line::from(format!("version: {}", m.mod_version)));
+            lines.push(field_line("Version", m.mod_version.clone()));
         }
         if !m.supported_versions.is_empty() {
-            lines.push(Line::from(format!(
-                "game: {}",
-                m.supported_versions.join(", ")
-            )));
+            lines.push(field_line("Game versions", m.supported_versions.join(", ")));
         }
-        lines.push(Line::from(format!("path: {}", m.path.display())));
+        lines.push(field_line("Folder", m.path.display().to_string()));
         if !m.url.is_empty() {
-            lines.push(Line::from(format!("url: {}", m.url)));
+            lines.push(field_line("URL", m.url.clone()));
         }
         if let Some(line) = github_line {
-            lines.push(Line::from(Span::styled(
-                line,
-                Style::default().fg(Color::Cyan),
-            )));
+            lines.push(field_line("GitHub", line));
         }
         if let Some(line) = git_line {
-            lines.push(Line::from(Span::styled(
-                line,
-                Style::default().fg(Color::Cyan),
-            )));
+            lines.push(field_line("Git", line));
         }
         if !m.dependencies.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "dependencies",
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
-            for d in &m.dependencies {
-                let name = if d.display_name.is_empty() {
-                    d.package_id.clone()
-                } else {
-                    format!("{} ({})", d.display_name, d.package_id)
-                };
-                lines.push(Line::from(format!("  {name}")));
-            }
+            let deps: Vec<String> = m
+                .dependencies
+                .iter()
+                .map(|d| {
+                    if d.display_name.is_empty() {
+                        d.package_id.clone()
+                    } else {
+                        d.display_name.clone()
+                    }
+                })
+                .collect();
+            lines.push(field_line("Requires", deps.join(", ")));
         }
         if !m.load_after.is_empty() {
-            lines.push(Line::from(format!(
-                "loadAfter: {}",
-                m.load_after.join(", ")
-            )));
+            lines.push(field_line("Loads after", m.load_after.join(", ")));
         }
         if !m.load_before.is_empty() {
-            lines.push(Line::from(format!(
-                "loadBefore: {}",
-                m.load_before.join(", ")
-            )));
+            lines.push(field_line("Loads before", m.load_before.join(", ")));
         }
         if !m.incompatible_with.is_empty() {
-            lines.push(Line::from(format!(
-                "incompatible: {}",
-                m.incompatible_with.join(", ")
-            )));
+            lines.push(field_line("Incompatible", m.incompatible_with.join(", ")));
         }
         if m.load_first {
-            lines.push(Line::from("loadTop: yes (tier 1)"));
+            lines.push(field_line("Pinned", "always loads at the top".into()));
         }
         if m.load_last {
-            lines.push(Line::from("loadBottom: yes (tier 3)"));
+            lines.push(field_line("Pinned", "always loads at the bottom".into()));
         }
         if !m.description.is_empty() {
             lines.push(Line::from(""));
             lines.push(Line::from(m.description.clone()));
         }
     } else {
-        lines.push(Line::from("No mod selected."));
+        lines.push(Line::from(Span::styled(
+            "Select a mod to see its details. Enter activates or deactivates it.",
+            DIM,
+        )));
     }
 
-    let block = Block::default().title(" Info ").borders(Borders::ALL);
+    let block = pane(title("Details", String::new()), false);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -244,49 +294,76 @@ fn draw_info(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn draw_list(frame: &mut Frame, app: &mut App, area: Rect, pane: Pane) {
-    let focused = app.pane == pane && app.screen == Screen::Main;
-    let (title, paths, selected) = match pane {
-        Pane::Inactive => (
-            format!(" Inactive ({}) ", app.inactive_paths.len()),
-            app.filtered_inactive(),
-            app.selected_inactive,
-        ),
-        Pane::Active => (
-            format!(" Active ({}) ", app.active_paths.len()),
+fn draw_list(frame: &mut Frame, app: &mut App, area: Rect, pane_kind: Pane) {
+    let focused = app.pane == pane_kind && app.screen == Screen::Main;
+    let active = pane_kind == Pane::Active;
+    let (heading, paths, selected) = if active {
+        (
+            title("Load order", format!("{} active", app.active_paths.len())),
             app.filtered_active(),
             app.selected_active,
-        ),
+        )
+    } else {
+        (
+            title("Inactive", app.inactive_paths.len().to_string()),
+            app.filtered_inactive(),
+            app.selected_inactive,
+        )
     };
+
+    let positions: std::collections::HashMap<&std::path::PathBuf, usize> = if active {
+        app.active_paths
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p, i + 1))
+            .collect()
+    } else {
+        Default::default()
+    };
+    let mut worst: std::collections::HashMap<&str, Severity> = Default::default();
+    if active {
+        for issue in &app.issues {
+            worst
+                .entry(issue.package_id.as_str())
+                .and_modify(|w| {
+                    if issue.severity == Severity::Error {
+                        *w = Severity::Error;
+                    }
+                })
+                .or_insert(issue.severity);
+        }
+    }
+    let number_width = app.active_paths.len().to_string().len();
 
     let items: Vec<ListItem> = paths
         .iter()
         .map(|p| {
-            let m = app.mod_ref(p);
-            let label = match m {
-                Some(m) => format!("[{}] {}", source_tag(m.source), m.name),
-                None => p.display().to_string(),
+            let Some(m) = app.mod_ref(p) else {
+                return ListItem::new(p.display().to_string());
             };
-            ListItem::new(label)
+            let mut spans = Vec::with_capacity(5);
+            if let Some(n) = positions.get(p) {
+                spans.push(Span::styled(format!("{n:>number_width$} "), DIM));
+                spans.push(severity_glyph(worst.get(m.package_id.as_str()).copied()));
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(format!("{:<4}", source_tag(m.source)), DIM));
+            spans.push(Span::raw(m.name.clone()));
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
-    let border = if focused { Color::Yellow } else { Color::Gray };
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border));
-
     let list = List::new(items)
-        .block(block)
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("> ");
+        .block(pane(heading, focused))
+        // Full selection color only where the keys go; the other list keeps a quiet marker.
+        .highlight_style(if focused {
+            SELECTED_STYLE
+        } else {
+            Style::new().bg(PLATE)
+        })
+        .highlight_symbol("▌");
 
-    let state = match pane {
+    let state = match pane_kind {
         Pane::Inactive => {
             app.inactive_state.select(if paths.is_empty() {
                 None
@@ -316,46 +393,74 @@ fn source_tag(source: rimdeck_core::model::ModSource) -> &'static str {
 }
 
 fn draw_warnings(frame: &mut Frame, app: &App, area: Rect) {
-    let lines: Vec<Line> = if app.issues.is_empty() {
-        vec![Line::from(Span::styled(
-            "No issues.",
-            Style::default().fg(Color::Green),
-        ))]
+    let errors = app
+        .issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .count();
+    let heading = if app.issues.is_empty() {
+        title("No problems found", String::new())
     } else {
-        app.issues
-            .iter()
-            .map(|issue| {
-                let (prefix, color) = match issue.severity {
-                    Severity::Error => ("ERR", Color::Red),
-                    Severity::Warning => ("WARN", Color::Yellow),
-                };
-                Line::from(vec![
-                    Span::styled(format!("{prefix} "), Style::default().fg(color)),
-                    Span::raw(issue.message.clone()),
-                ])
-            })
-            .collect()
+        title(
+            "Problems",
+            format!(
+                "{} and {}",
+                plural(errors, "error"),
+                plural(app.issues.len() - errors, "warning")
+            ),
+        )
     };
-    let title = format!(" Issues ({}) ", app.issues.len());
+    let lines: Vec<Line> = app
+        .issues
+        .iter()
+        .map(|issue| {
+            Line::from(vec![
+                severity_glyph(Some(issue.severity)),
+                Span::raw(format!(" {}", issue.message)),
+            ])
+        })
+        .collect();
     frame.render_widget(
         Paragraph::new(lines)
-            .block(Block::default().title(title).borders(Borders::ALL))
+            .block(pane(heading, false))
             .scroll((app.warning_scroll, 0)),
         area,
     );
 }
 
-fn draw_status(frame: &mut Frame, area: Rect, line: Line<'_>) {
+/// Status on one line, key help under it, on a Plate band without a frame.
+fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let mut status = vec![Span::raw(" ")];
+    if app.is_busy() {
+        status.push(Span::styled(
+            format!("{} ", app.spinner_glyph()),
+            Style::new().fg(VERDIGRIS),
+        ));
+    }
+    if app.dirty {
+        status.push(Span::styled(
+            "Unsaved changes (w saves)  ",
+            Style::new().fg(OCHRE),
+        ));
+    }
+    status.push(Span::raw(app.status.as_str()));
+    if app.input_mode == InputMode::Search || !app.search.is_empty() {
+        status.push(Span::raw("  "));
+        status.push(Span::styled("/", KEY_STYLE));
+        status.push(Span::raw(app.search.as_str()));
+    }
+    let mut help = vec![Span::raw(" ")];
+    help.extend(help_spans());
     frame.render_widget(
-        Paragraph::new(line)
+        Paragraph::new(vec![Line::from(status), Line::from(help)])
             .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL)),
+            .style(Style::new().bg(PLATE).fg(PARCHMENT)),
         area,
     );
 }
 
-const KEY_STYLE: Style = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-const LABEL_STYLE: Style = Style::new().fg(Color::Gray);
+const KEY_STYLE: Style = Style::new().fg(VERDIGRIS).add_modifier(Modifier::BOLD);
+const LABEL_STYLE: Style = Style::new().fg(DUST);
 
 const HELP_KEYS: &[(&str, &str)] = &[
     ("q", "quit"),
@@ -403,74 +508,11 @@ fn help_spans() -> Vec<Span<'static>> {
     spans
 }
 
-fn status_text(app: &App) -> String {
-    let dirty = if app.dirty { " *unsaved" } else { "" };
-    let spin = if app.is_busy() {
-        format!(" {} ", app.spinner_glyph())
-    } else {
-        String::new()
-    };
-    let search = if app.input_mode == InputMode::Search || !app.search.is_empty() {
-        format!("  /{}", app.search)
-    } else {
-        String::new()
-    };
-    format!(
-        " rimdeck{dirty}{spin}  {}  {}{search}",
-        app.status,
-        help_plain()
-    )
-}
-
-fn status_line(app: &App) -> Line<'_> {
-    let mut spans = vec![Span::styled(
-        " rimdeck",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    )];
-    if app.dirty {
-        spans.push(Span::styled(
-            " *unsaved",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    if app.is_busy() {
-        spans.push(Span::styled(
-            format!(" {} ", app.spinner_glyph()),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
-    } else {
-        spans.push(Span::raw("  "));
-    }
-    if !app.status.is_empty() {
-        let status_style = if app.is_busy() {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(app.status.as_str(), status_style));
-        spans.push(Span::raw("  "));
-    }
-    spans.extend(help_spans());
-    if app.input_mode == InputMode::Search || !app.search.is_empty() {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled("/", KEY_STYLE));
-        spans.push(Span::raw(app.search.as_str()));
-    }
-    Line::from(spans)
-}
-
-/// Border (2) + wrapped content, capped so the lists still have room.
-fn status_bar_height(text: &str, inner_width: u16) -> u16 {
-    let lines = wrap_line_count(text, inner_width as usize) as u16;
-    lines.saturating_add(2).clamp(3, 7)
+/// Status line(s) plus the wrapped key help, capped so the lists keep room.
+fn footer_height(status: &str, help: &str, width: u16) -> u16 {
+    let width = width.saturating_sub(1).max(1) as usize;
+    let status = (wrap_line_count(status, width) as u16).clamp(1, 2);
+    status + (wrap_line_count(help, width) as u16).clamp(1, 4)
 }
 
 fn wrap_line_count(text: &str, width: usize) -> usize {
@@ -508,7 +550,8 @@ fn wrap_one_line(line: &str, width: usize) -> usize {
     lines.max(1)
 }
 
-const INSTANCE_HINT: &str = "Instance: a new name creates one, an existing name switches, -name deletes";
+const INSTANCE_HINT: &str =
+    "Instance: a new name creates one, an existing name switches, -name deletes";
 
 fn draw_settings(frame: &mut Frame, app: &App) {
     let area = centered(frame.area(), 84, 28);
@@ -516,9 +559,7 @@ fn draw_settings(frame: &mut Frame, app: &App) {
     let mut lines = vec![
         Line::from(Span::styled(
             "Settings",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(VERDIGRIS).add_modifier(Modifier::BOLD),
         )),
         Line::from("Up/Down select  Enter edit/cycle  s save  Esc back"),
         Line::from(INSTANCE_HINT),
@@ -533,7 +574,7 @@ fn draw_settings(frame: &mut Frame, app: &App) {
             app.settings.field_display(field)
         };
         let style = if selected {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(VERDIGRIS)
         } else {
             Style::default()
         };
@@ -556,9 +597,7 @@ fn draw_image_warning(frame: &mut Frame, app: &App) {
     let lines = vec![
         Line::from(Span::styled(
             "Preview warning",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(VERDIGRIS).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(format!(
@@ -575,7 +614,7 @@ fn draw_image_warning(frame: &mut Frame, app: &App) {
             Block::default()
                 .title(" Warning ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow)),
+                .border_style(Style::default().fg(VERDIGRIS)),
         ),
         area,
     );
@@ -594,7 +633,7 @@ fn draw_file_explorer(frame: &mut Frame, app: &mut App) {
     let outer = Block::default()
         .title(" Load mod list ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(VERDIGRIS));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
 
@@ -606,9 +645,7 @@ fn draw_file_explorer(frame: &mut Frame, app: &mut App) {
     let header = vec![
         Line::from(Span::styled(
             location,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(VERDIGRIS).add_modifier(Modifier::BOLD),
         )),
         Line::from("j/k move  Enter open  Backspace up  click select  Esc cancel"),
     ];
@@ -620,11 +657,11 @@ fn draw_file_explorer(frame: &mut Frame, app: &mut App) {
         .iter()
         .map(|e| {
             let (label, style) = if e.is_parent {
-                ("../".to_string(), Style::default().fg(Color::Cyan))
+                ("../".to_string(), Style::default().fg(VERDIGRIS))
             } else if e.is_dir {
-                (format!("{}/", e.name), Style::default().fg(Color::Cyan))
+                (format!("{}/", e.name), Style::default().fg(VERDIGRIS))
             } else {
-                (e.name.clone(), Style::default().fg(Color::White))
+                (e.name.clone(), Style::default())
             };
             ListItem::new(label).style(style)
         })
@@ -634,10 +671,11 @@ fn draw_file_explorer(frame: &mut Frame, app: &mut App) {
         .block(Block::default().borders(Borders::ALL).title(" XML files "))
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(SELECTED)
+                .fg(PARCHMENT)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("▌");
 
     app.file_browser
         .state
@@ -666,7 +704,7 @@ fn draw_workshop(frame: &mut Frame, app: &mut App) {
     let outer = Block::default()
         .title(" Workshop search ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(VERDIGRIS));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
 
@@ -677,11 +715,11 @@ fn draw_workshop(frame: &mut Frame, app: &mut App) {
 
     let header = vec![
         Line::from(vec![
-            Span::styled("Query: ", Style::default().fg(Color::Gray)),
+            Span::styled("Query: ", Style::default().fg(DUST)),
             Span::styled(
                 query,
                 if editing {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(VERDIGRIS)
                 } else {
                     Style::default()
                 },
@@ -710,7 +748,12 @@ fn draw_workshop(frame: &mut Frame, app: &mut App) {
             } else {
                 format!(
                     "  {}",
-                    item.tags.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+                    item.tags
+                        .iter()
+                        .take(3)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             };
             let label = format!(
@@ -732,10 +775,11 @@ fn draw_workshop(frame: &mut Frame, app: &mut App) {
         .block(Block::default().borders(Borders::ALL).title(title))
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(SELECTED)
+                .fg(PARCHMENT)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("▌");
 
     app.workshop_state.select(if app.workshop_items.is_empty() {
         None
@@ -765,7 +809,7 @@ fn draw_github(frame: &mut Frame, app: &mut App) {
     let outer = Block::default()
         .title(" GitHub mods ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(VERDIGRIS));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
 
@@ -776,11 +820,11 @@ fn draw_github(frame: &mut Frame, app: &mut App) {
 
     let header = vec![
         Line::from(vec![
-            Span::styled("Install: ", Style::default().fg(Color::Gray)),
+            Span::styled("Install: ", Style::default().fg(DUST)),
             Span::styled(
                 query,
                 if editing {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(VERDIGRIS)
                 } else {
                     Style::default()
                 },
@@ -818,7 +862,7 @@ fn draw_github(frame: &mut Frame, app: &mut App) {
                     entry.owner_repo, entry.installed_version
                 );
                 let style = if has_update {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(OCHRE)
                 } else {
                     Style::default()
                 };
@@ -836,10 +880,11 @@ fn draw_github(frame: &mut Frame, app: &mut App) {
         .block(Block::default().borders(Borders::ALL).title(title))
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(SELECTED)
+                .fg(PARCHMENT)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("▌");
 
     app.github_state.select(if app.github_mods.mods.is_empty() {
         None
@@ -869,7 +914,7 @@ fn draw_git(frame: &mut Frame, app: &mut App) {
     let outer = Block::default()
         .title(" Git mods ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(VERDIGRIS));
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
 
@@ -880,11 +925,11 @@ fn draw_git(frame: &mut Frame, app: &mut App) {
 
     let header = vec![
         Line::from(vec![
-            Span::styled("Clone: ", Style::default().fg(Color::Gray)),
+            Span::styled("Clone: ", Style::default().fg(DUST)),
             Span::styled(
                 query,
                 if editing {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(VERDIGRIS)
                 } else {
                     Style::default()
                 },
@@ -919,9 +964,9 @@ fn draw_git(frame: &mut Frame, app: &mut App) {
                 item.name, item.origin, item.branch, item.short_sha
             );
             let style = if item.has_update() {
-                Style::default().fg(Color::Yellow)
+                Style::default().fg(OCHRE)
             } else if item.error.is_some() {
-                Style::default().fg(Color::Red)
+                Style::default().fg(BRICK)
             } else {
                 Style::default()
             };
@@ -938,10 +983,11 @@ fn draw_git(frame: &mut Frame, app: &mut App) {
         .block(Block::default().borders(Borders::ALL).title(title))
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(SELECTED)
+                .fg(PARCHMENT)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("▌");
 
     app.git_state.select(if app.git_items.is_empty() {
         None
@@ -959,22 +1005,27 @@ fn draw_path_prompt(frame: &mut Frame, app: &App) {
     let (title, action, label) = match app.path_prompt {
         PathPromptKind::Export => ("Export mod list", "Enter write  Esc cancel", "Path"),
         PathPromptKind::Rule => {
-            let pid = app.selected_mod().map(|m| m.package_id.as_str()).unwrap_or("");
+            let pid = app
+                .selected_mod()
+                .map(|m| m.package_id.as_str())
+                .unwrap_or("");
             let (after, before) = app.user_rules.order_rules(pid);
             rule_hint = format!(
                 "a <id> load after · b <id> load before · -a / -b <id> remove · Esc cancel  ·  yours: after [{}]  before [{}]",
                 after.join(", "),
                 before.join(", ")
             );
-            ("User load-order rule for the selected mod", rule_hint.as_str(), "Rule")
+            (
+                "User load-order rule for the selected mod",
+                rule_hint.as_str(),
+                "Rule",
+            )
         }
     };
     let lines = vec![
         Line::from(Span::styled(
             title,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(VERDIGRIS).add_modifier(Modifier::BOLD),
         )),
         Line::from(action),
         Line::from(""),
@@ -1060,13 +1111,13 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_grows_then_caps() {
+    fn footer_grows_then_caps() {
         let help = help_plain();
-        // One line wide enough for the whole bar: 1 text row + 2 border rows.
-        assert_eq!(status_bar_height(&help, help.chars().count() as u16), 3);
-        let tall = status_bar_height(&help, 20);
-        assert!(tall > 3);
-        assert!(tall <= 7);
+        let wide = help.chars().count() as u16 + 10;
+        assert_eq!(footer_height("ok", &help, wide), 2);
+        let tall = footer_height("ok", &help, 20);
+        assert!(tall > 2);
+        assert!(tall <= 6);
     }
 
     #[test]

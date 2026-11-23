@@ -14,7 +14,7 @@ GUI: RimSort-style main window (mod info with preview, inactive/active lists wit
 
 Both frontends also have: a per-mod rule editor (user loadAfter/loadBefore/loadTop/loadBottom in `userRules.json`), duplicate-install and game-version warnings, Steam Workshop collection import, and instances (named sets of game/mods/workshop/config paths, picked with the Instance setting: a new name creates one, an existing name switches, `-name` deletes).
 
-Texture optimization (RimSort's todds feature) uses [ddsify](https://crates.io/crates/ddsify): `Textures` PNGs in active non-DLC mods become BC1/BC7 DDS with mipmaps, re-encoded only when the PNG is newer. "Delete DDS" removes DDS files that sit next to a PNG.
+Texture optimization (RimSort's todds feature) uses [ddsify](https://crates.io/crates/ddsify): `Textures` PNGs in active non-DLC mods become BC1/BC7 DDS with mipmaps, re-encoded only when the PNG is newer. "Remove DDS" (`O` in the TUI) removes DDS files that sit next to a PNG.
 
 `rimdeck-tui build-db [--out PATH] [--no-deps]` merges installed mods into `steamDB.json` (with a Steam WebAPI key it also fetches Workshop "required items" as dependencies).
 
@@ -28,6 +28,10 @@ Texture optimization (RimSort's todds feature) uses [ddsify](https://crates.io/c
 
 Both frontends own a `Session`, call `poll()` on a timer, and pass explicit targets (paths, package IDs). Selection and widgets stay in the frontend. Settings and databases are shared, so either UI can be used on the same setup.
 
+## Look
+
+Both frontends share one palette (`crates/gui/src/theme.rs`, mirrored at the top of `crates/tui/src/ui/mod.rs`): steel panels, parchment text, verdigris for selection and primary actions, ochre for warnings and unsaved changes, brick for errors. The GUI uses Barlow Semi Condensed (SIL OFL, bundled in `crates/gui/fonts`).
+
 ## Build
 
 ```bash
@@ -38,9 +42,9 @@ cargo test --workspace
 
 ## GUI
 
-Click a mod to see its info; double-click (or Activate/Deactivate) to move it between lists. ▲/▼ move the selected active mod. Names in the active list turn red/yellow when they have errors/warnings.
+Click a mod to see its details; double-click it (or use Activate/Deactivate) to move it between lists. The load order is numbered by position; a brick ● marks a mod with an error and an ochre ▲ one with a warning, in both frontends. Click a problem in the bottom panel to jump to its mod.
 
-Keyboard: ↑/↓ select, Ctrl+↑/↓ move the selected active mod, Enter activates/deactivates, Ctrl+S saves. Enter in a search box selects the first match. Build DB adds installed Workshop mods to `steamDB.json`.
+Keyboard: ↑/↓ select, Ctrl+↑/↓ move the selected active mod, Enter activates/deactivates, Ctrl+S saves. Enter in a search box selects the first match. Build Steam DB adds installed Workshop mods to `steamDB.json`.
 
 ## TUI keybindings
 

@@ -3,6 +3,7 @@
 //! Inspired by RimSort (https://github.com/RimSort/RimSort).
 
 mod manage;
+mod theme;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -12,18 +13,15 @@ use iced::keyboard::{self, key::Named, Key};
 use iced::widget::operation::{self, RelativeOffset};
 use iced::widget::{
     button, column, container, image, mouse_area, pick_list, row, rule, scrollable, space, text,
-    text_input,
+    text_input, toggler,
 };
-use iced::{Color, Element, Length, Subscription, Task, Theme};
+use iced::{Alignment, Element, Length, Subscription, Task};
 
 use rimdeck_core::issues::Severity;
 use rimdeck_core::model::{Mod, ModSource};
 use rimdeck_core::session::{self, Session};
 use rimdeck_core::settings::{Settings, SettingsField, SortMode};
 
-const ERROR_COLOR: Color = Color::from_rgb(0.95, 0.35, 0.35);
-const WARN_COLOR: Color = Color::from_rgb(0.95, 0.8, 0.3);
-const DIM_COLOR: Color = Color::from_rgb(0.6, 0.6, 0.6);
 const INACTIVE_LIST: &str = "inactive-list";
 const ACTIVE_LIST: &str = "active-list";
 
@@ -32,7 +30,11 @@ fn main() -> iced::Result {
     iced::application(Gui::boot, Gui::update, Gui::view)
         .title(Gui::title)
         .subscription(Gui::subscription)
-        .theme(|_: &Gui| Theme::Dark)
+        .theme(|_: &Gui| theme::theme())
+        .font(theme::FONT_FILES[0])
+        .font(theme::FONT_FILES[1])
+        .font(theme::FONT_FILES[2])
+        .default_font(theme::FONT)
         .window_size((1400.0, 860.0))
         .run()
 }
@@ -111,8 +113,12 @@ enum Message {
     Key(KeyCmd),
     /// Enter in a mod search box: select the first match (`true` = active list).
     SearchSubmit(bool),
+    /// Clicked issue: select the mod with this packageId.
+    SelectPackage(String),
     BuildDb,
-    Textures { clean: bool },
+    Textures {
+        clean: bool,
+    },
     Select(PathBuf),
     Toggle(PathBuf),
     InactiveSearch(String),
@@ -129,8 +135,13 @@ enum Message {
     ToggleLoadTop,
     ToggleLoadBottom,
     RuleInput(String),
-    RuleAdd { before: bool },
-    RuleRemove { other: String, before: bool },
+    RuleAdd {
+        before: bool,
+    },
+    RuleRemove {
+        other: String,
+        before: bool,
+    },
     Nav(View),
     SettingsEdit(SettingsField, String),
     SaveSettings,
@@ -254,6 +265,12 @@ impl Gui {
                 }
                 self.reveal()
             }
+            Message::SelectPackage(pid) => {
+                if let Some(p) = self.find_package(&pid) {
+                    self.select(p);
+                }
+                self.reveal()
+            }
             Message::SearchSubmit(active) => {
                 let first = self.visible(active).into_iter().next();
                 if let Some(p) = first {
@@ -318,7 +335,13 @@ impl Gui {
             if let Some(i) = list.iter().position(|x| x == p) {
                 // Snapping to index/(len-1) keeps that row inside the viewport for any row height.
                 let y = i as f32 / list.len().saturating_sub(1).max(1) as f32;
-                return operation::snap_to(id, RelativeOffset { x: None, y: Some(y) });
+                return operation::snap_to(
+                    id,
+                    RelativeOffset {
+                        x: None,
+                        y: Some(y),
+                    },
+                );
             }
         }
         Task::none()
@@ -330,7 +353,7 @@ impl Gui {
         }
         let s = &mut self.session;
         match message {
-            Message::Key(_) | Message::SearchSubmit(_) => {} // handled in `update`
+            Message::Key(_) | Message::SearchSubmit(_) | Message::SelectPackage(_) => {} // handled in `update`
             Message::BuildDb => s.build_db(),
             Message::Textures { clean } => s.optimize_textures(clean),
             Message::Tick => {
@@ -412,7 +435,8 @@ impl Gui {
             }
             Message::RuleRemove { other, before } => {
                 if let Some(pid) = self.selected_package_id() {
-                    self.session.set_user_order_rule(&pid, &other, before, false);
+                    self.session
+                        .set_user_order_rule(&pid, &other, before, false);
                 }
             }
             Message::Nav(View::Settings) => self.open_settings(),
@@ -454,15 +478,35 @@ impl Gui {
 
     fn view(&self) -> Element<'_, Message> {
         let tabs = View::TABS.iter().map(|&(view, label)| {
-            button(label)
-                .on_press(Message::Nav(view))
-                .style(if view == self.view {
-                    button::primary
-                } else {
-                    button::text
-                })
-                .into()
+            let open = view == self.view;
+            button(
+                text(label)
+                    .size(15)
+                    .font(if open { theme::SEMIBOLD } else { theme::FONT }),
+            )
+            .on_press(Message::Nav(view))
+            .padding([6, 14])
+            .style(move |t, status| theme::tab(t, status, open))
+            .into()
         });
+        let header = row(tabs)
+            .push(space::horizontal())
+            .push(
+                text(format!(
+                    "Instance: {}",
+                    self.session.settings.instance_name()
+                ))
+                .size(13)
+                .color(theme::DUST),
+            )
+            .spacing(2)
+            .padding(iced::Padding {
+                top: 6.0,
+                right: 14.0,
+                bottom: 0.0,
+                left: 10.0,
+            })
+            .align_y(Alignment::Center);
         let body = match self.view {
             View::Mods => self.main_view(),
             View::Workshop => self.workshop_view(),
@@ -470,155 +514,183 @@ impl Gui {
             View::Git => self.git_view(),
             View::Settings => self.settings_view(),
         };
-        column![
-            row(tabs).spacing(4).padding([4, 8]),
-            rule::horizontal(1),
-            body,
-            self.status_bar()
-        ]
-        .into()
+        column![header, body, self.status_bar()].into()
     }
 
     // ---- main window ------------------------------------------------------
 
     fn main_view(&self) -> Element<'_, Message> {
         let s = &self.session;
+        let save = if s.dirty {
+            button("Save changes")
+                .on_press(Message::Save)
+                .style(theme::attention)
+        } else {
+            button("Save").on_press(Message::Save).style(theme::quiet)
+        };
+        let reload = if self.confirm_refresh {
+            button("Discard changes and reload")
+                .on_press(Message::Refresh)
+                .style(theme::danger)
+        } else {
+            button("Reload")
+                .on_press(Message::Refresh)
+                .style(theme::quiet)
+        };
+        let tools = [
+            ("Import list…", Message::ImportList),
+            ("Export list…", Message::ExportList),
+            ("Update databases", Message::FetchDbs),
+            ("Build Steam DB", Message::BuildDb),
+            ("Optimize textures", Message::Textures { clean: false }),
+            ("Remove DDS", Message::Textures { clean: true }),
+        ]
+        .map(|(label, msg)| button(label).on_press(msg).style(theme::subtle).into());
         let toolbar = row![
-            button(if self.confirm_refresh {
-                "Discard & refresh"
-            } else {
-                "Refresh"
-            })
-            .on_press(Message::Refresh)
-            .style(if self.confirm_refresh {
-                button::danger
-            } else {
-                button::primary
-            }),
-            button("Sort").on_press(Message::Sort),
-            pick_list(&SortMode::ALL[..], Some(s.settings.sort_mode), Message::SortMode),
-            button("Save").on_press(Message::Save).style(if s.dirty {
-                button::success
-            } else {
-                button::primary
-            }),
-            button("Clear").on_press(Message::Clear).style(button::secondary),
-            button("Import list…")
-                .on_press(Message::ImportList)
-                .style(button::secondary),
-            button("Export list…")
-                .on_press(Message::ExportList)
-                .style(button::secondary),
+            button("Sort").on_press(Message::Sort).style(theme::primary),
+            pick_list(
+                &SortMode::ALL[..],
+                Some(s.settings.sort_mode),
+                Message::SortMode
+            ),
+            save,
+            reload,
             space::horizontal(),
-            button("Download DBs")
-                .on_press(Message::FetchDbs)
-                .style(button::secondary),
-            button("Build DB")
-                .on_press(Message::BuildDb)
-                .style(button::secondary),
-            button("Optimize textures")
-                .on_press(Message::Textures { clean: false })
-                .style(button::secondary),
-            button("Delete DDS")
-                .on_press(Message::Textures { clean: true })
-                .style(button::secondary),
-            button("Run game").on_press(Message::Launch),
+            row(tools).spacing(6),
+            button("Run game")
+                .on_press(Message::Launch)
+                .style(theme::primary),
         ]
         .spacing(8)
-        .padding(8);
+        .padding([10, 12])
+        .align_y(Alignment::Center);
 
-        let inactive = s.filtered_inactive(&self.inactive_search);
-        let active = s.filtered_active(&self.active_search);
         let lists = row![
+            self.mod_list(false),
+            self.mod_list(true),
             container(self.info_panel()).width(Length::FillPortion(3)),
-            self.mod_list(
-                format!("Inactive ({})", s.inactive_paths.len()),
-                &self.inactive_search,
-                Message::InactiveSearch,
-                &inactive,
-                false,
-            ),
-            self.mod_list(
-                format!("Active ({})", s.active_paths.len()),
-                &self.active_search,
-                Message::ActiveSearch,
-                &active,
-                true,
-            ),
         ]
-        .spacing(8)
-        .padding([0, 8])
+        .spacing(10)
+        .padding([0, 12])
         .height(Length::FillPortion(4));
 
         column![
             toolbar,
             lists,
-            rule::horizontal(1),
-            self.issues_panel().height(Length::FillPortion(1)),
+            container(self.issues_panel())
+                .padding([10, 12])
+                .height(Length::FillPortion(1)),
         ]
         .height(Length::Fill)
         .into()
     }
 
-    fn mod_list<'a>(
-        &'a self,
-        title: String,
-        query: &'a str,
-        on_search: fn(String) -> Message,
-        paths: &[PathBuf],
-        active: bool,
-    ) -> Element<'a, Message> {
+    /// The inactive list, or the load order (numbered by its real position, also while filtered).
+    fn mod_list(&self, active: bool) -> Element<'_, Message> {
+        let s = &self.session;
+        let paths = self.visible(active);
+        let positions: HashMap<&PathBuf, usize> = if active {
+            s.active_paths
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p, i + 1))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let worst = self.worst_issues();
         let rows = paths.iter().filter_map(|p| {
-            let m = self.session.mod_ref(p)?;
-            Some(self.mod_row(m, active))
+            let m = s.mod_ref(p)?;
+            let severity = if active {
+                worst.get(m.package_id.as_str()).copied()
+            } else {
+                None
+            };
+            Some(self.mod_row(m, positions.get(p).copied(), severity))
         });
-        let mut header = row![text(title).size(16), space::horizontal()].spacing(4);
+        let (title, count, query, on_search): (_, _, _, fn(String) -> Message) = if active {
+            (
+                "Load order",
+                format!("{} active", s.active_paths.len()),
+                &self.active_search,
+                Message::ActiveSearch,
+            )
+        } else {
+            (
+                "Inactive",
+                s.inactive_paths.len().to_string(),
+                &self.inactive_search,
+                Message::InactiveSearch,
+            )
+        };
+        let mut header = row![
+            text(title).size(17).font(theme::SEMIBOLD),
+            text(count).size(13).color(theme::DUST),
+            space::horizontal(),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
         if active {
             header = header
-                .push(button("▲").on_press(Message::MoveSelected(-1)).padding([2, 8]))
-                .push(button("▼").on_press(Message::MoveSelected(1)).padding([2, 8]));
+                .push(small_button("Move up", Message::MoveSelected(-1)))
+                .push(small_button("Move down", Message::MoveSelected(1)))
+                .push(small_button("Deactivate all", Message::Clear));
         }
         column![
             header,
-            text_input("Search name, packageId, author…", query)
+            text_input("Filter by name, packageId or author", query)
                 .on_input(on_search)
                 .on_submit(Message::SearchSubmit(active))
-                .padding(6),
+                .padding(6)
+                .size(14),
             container(
-                scrollable(column(rows).spacing(1))
+                scrollable(column(rows))
                     .id(if active { ACTIVE_LIST } else { INACTIVE_LIST })
                     .height(Length::Fill)
             )
-                .style(container::bordered_box)
-                .padding(2)
-                .height(Length::Fill),
+            .style(theme::panel)
+            .padding(4)
+            .height(Length::Fill),
         ]
         .spacing(6)
-        .width(Length::FillPortion(3))
+        .width(Length::FillPortion(if active { 4 } else { 3 }))
         .into()
     }
 
-    fn mod_row<'a>(&'a self, m: &'a Mod, active: bool) -> Element<'a, Message> {
+    fn mod_row<'a>(
+        &self,
+        m: &'a Mod,
+        position: Option<usize>,
+        severity: Option<Severity>,
+    ) -> Element<'a, Message> {
         let selected = self.selected.as_deref() == Some(m.path.as_path());
-        let severity = active
-            .then(|| self.worst_issue(&m.package_id))
-            .flatten();
-        let name_color = match severity {
-            Some(Severity::Error) => Some(ERROR_COLOR),
-            Some(Severity::Warning) => Some(WARN_COLOR),
-            None => None,
-        };
-        let label = row![
-            text(source_tag(m.source)).size(11).color(DIM_COLOR).width(28),
-            text(&m.name).size(14).color_maybe(name_color),
-        ]
-        .spacing(6);
+        let mut line = row![].spacing(8).align_y(Alignment::Center);
+        if let Some(n) = position {
+            let (glyph, color) = severity_glyph(severity);
+            line = line
+                .push(
+                    text(n.to_string())
+                        .size(12)
+                        .color(theme::DUST)
+                        .width(34)
+                        .align_x(iced::alignment::Horizontal::Right),
+                )
+                .push(text(glyph).size(11).color(color).width(10));
+        }
+        line = line
+            .push(
+                text(source_tag(m.source))
+                    .size(11)
+                    .color(theme::DUST)
+                    .width(24),
+            )
+            .push(text(&m.name).size(14));
         // Not a button: a button captures the press, so MouseArea would never see the double-click.
-        let row_box = container(label)
+        let row_box = container(line)
             .width(Length::Fill)
             .padding([3, 6])
             .style(if selected {
-                container::primary
+                theme::selected_row
             } else {
                 container::transparent
             });
@@ -629,42 +701,79 @@ impl Gui {
             .into()
     }
 
-    fn worst_issue(&self, package_id: &str) -> Option<Severity> {
-        let mut worst = None;
-        for issue in self.session.issues.iter().filter(|i| i.package_id == package_id) {
-            if issue.severity == Severity::Error {
-                return Some(Severity::Error);
-            }
-            worst = Some(issue.severity);
+    /// Worst issue per packageId, built once per frame instead of once per row.
+    fn worst_issues(&self) -> HashMap<&str, Severity> {
+        let mut worst = HashMap::new();
+        for issue in &self.session.issues {
+            worst
+                .entry(issue.package_id.as_str())
+                .and_modify(|w| {
+                    if issue.severity == Severity::Error {
+                        *w = Severity::Error;
+                    }
+                })
+                .or_insert(issue.severity);
         }
         worst
+    }
+
+    /// Active copy first, so an issue jumps to the mod that is actually loaded.
+    fn find_package(&self, package_id: &str) -> Option<PathBuf> {
+        let s = &self.session;
+        s.active_paths
+            .iter()
+            .chain(&s.inactive_paths)
+            .find(|p| {
+                s.mod_ref(p)
+                    .is_some_and(|m| m.package_id.eq_ignore_ascii_case(package_id))
+            })
+            .cloned()
     }
 
     fn info_panel(&self) -> Element<'_, Message> {
         let s = &self.session;
         let Some(m) = self.selected.as_ref().and_then(|p| s.mod_ref(p)) else {
-            return container(text("Select a mod. Double-click to activate or deactivate.").color(DIM_COLOR))
-                .padding(12)
-                .style(container::bordered_box)
-                .height(Length::Fill)
-                .width(Length::Fill)
-                .into();
+            return container(
+                text("Select a mod to see its details. Double-click it or press Enter to activate or deactivate it.")
+                    .size(14)
+                    .color(theme::DUST),
+            )
+            .padding(16)
+            .style(theme::panel)
+            .height(Length::Fill)
+            .width(Length::Fill)
+            .into();
         };
-        let mut col = column![].spacing(6).padding(12);
+        let mut col = column![].spacing(8).padding(16);
         if let Some(handle) = self.preview(m) {
-            col = col.push(image(handle).width(Length::Fill).height(200));
+            col = col.push(image(handle).width(Length::Fill).height(180));
+        }
+        col = col.push(
+            column![
+                text(&m.name).size(22).font(theme::SEMIBOLD),
+                text(m.author_line()).size(14).color(theme::DUST),
+            ]
+            .spacing(2),
+        );
+        for issue in s.issues.iter().filter(|i| i.package_id == m.package_id) {
+            let (glyph, color) = severity_glyph(Some(issue.severity));
+            col = col.push(
+                row![
+                    text(glyph).size(11).color(color),
+                    text(&issue.message).size(13)
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
         }
         col = col
-            .push(text(&m.name).size(20))
-            .push(field("Author", m.author_line()))
             .push(field("Package ID", m.package_id.clone()))
-            .push(field("Source", m.source.label().to_string()))
-            .push(field("Path", m.path.display().to_string()));
+            .push(field("Source", m.source.label().to_string()));
         if !m.mod_version.is_empty() {
             col = col.push(field("Version", m.mod_version.clone()));
         }
         if !m.supported_versions.is_empty() {
-            col = col.push(field("Supports", m.supported_versions.join(", ")));
+            col = col.push(field("Game versions", m.supported_versions.join(", ")));
         }
         if let Some(pfid) = &m.published_file_id {
             col = col.push(field("Workshop ID", pfid.clone()));
@@ -678,46 +787,27 @@ impl Gui {
                 .join(", ");
             col = col.push(field("Requires", deps));
         }
-        let mut flags = Vec::new();
-        if m.load_first {
-            flags.push("loadTop");
-        }
-        if m.load_last {
-            flags.push("loadBottom");
-        }
-        if !flags.is_empty() {
-            col = col.push(field("Rules", flags.join(", ")));
-        }
+        col = col.push(field("Folder", m.path.display().to_string()));
         let is_active = s.is_active(&m.path);
         col = col.push(
             row![
                 button(if is_active { "Deactivate" } else { "Activate" })
-                    .on_press(Message::Toggle(m.path.clone())),
+                    .on_press(Message::Toggle(m.path.clone()))
+                    .style(theme::primary),
                 button("Update")
                     .on_press(Message::UpdateSelected)
-                    .style(button::secondary),
-                button(if s.user_rules.load_top(&m.package_id) {
-                    "Unset loadTop"
-                } else {
-                    "loadTop"
-                })
-                .on_press(Message::ToggleLoadTop)
-                .style(button::secondary),
-                button(if s.user_rules.load_bottom(&m.package_id) {
-                    "Unset loadBottom"
-                } else {
-                    "loadBottom"
-                })
-                .on_press(Message::ToggleLoadBottom)
-                .style(button::secondary),
+                    .style(theme::quiet),
             ]
-            .spacing(6)
-            .wrap(),
+            .spacing(8),
         );
         col = col.push(self.rules_editor(m));
-        col = col.push(rule::horizontal(1)).push(text(&m.description).size(13));
+        if !m.description.is_empty() {
+            col = col
+                .push(rule::horizontal(1))
+                .push(text(&m.description).size(14));
+        }
         container(scrollable(col))
-            .style(container::bordered_box)
+            .style(theme::panel)
             .height(Length::Fill)
             .width(Length::Fill)
             .into()
@@ -733,11 +823,30 @@ impl Gui {
         let s = &self.session;
         let (c_after, c_before) = s.community_rules.order_rules(&m.package_id);
         let (u_after, u_before) = s.user_rules.order_rules(&m.package_id);
-        let mut col = column![text("Load order rules").size(15)].spacing(4);
+        let mut col = column![
+            text("Load order rules").size(16).font(theme::MEDIUM),
+            toggler(s.user_rules.load_top(&m.package_id))
+                .label("Always load at the top")
+                .text_size(14)
+                .on_toggle(|_| Message::ToggleLoadTop),
+            toggler(s.user_rules.load_bottom(&m.package_id))
+                .label("Always load at the bottom")
+                .text_size(14)
+                .on_toggle(|_| Message::ToggleLoadBottom),
+        ]
+        .spacing(6)
+        .padding(iced::Padding {
+            top: 8.0,
+            ..iced::Padding::ZERO
+        });
         for (ids, before) in [(c_after, false), (c_before, true)] {
             for id in ids {
                 let kind = if before { "before" } else { "after" };
-                col = col.push(text(format!("community: load {kind} {id}")).size(12).color(DIM_COLOR));
+                col = col.push(
+                    text(format!("Loads {kind} {id} (community rule)"))
+                        .size(13)
+                        .color(theme::DUST),
+                );
             }
         }
         for (ids, before) in [(u_after, false), (u_before, true)] {
@@ -745,32 +854,29 @@ impl Gui {
                 let kind = if before { "before" } else { "after" };
                 col = col.push(
                     row![
-                        text(format!("yours: load {kind} {id}")).size(13),
-                        button("✕")
+                        text(format!("Loads {kind} {id}")).size(13),
+                        button(text("✕").size(12))
                             .on_press(Message::RuleRemove { other: id, before })
                             .padding([0, 6])
-                            .style(button::text),
+                            .style(theme::bare(theme::DUST)),
                     ]
                     .spacing(6)
-                    .align_y(iced::Alignment::Center),
+                    .align_y(Alignment::Center),
                 );
             }
         }
         col.push(
             row![
-                text_input("another mod's packageId", &self.rule_input)
+                text_input("Another mod's packageId", &self.rule_input)
                     .on_input(Message::RuleInput)
                     .on_submit(Message::RuleAdd { before: false })
-                    .padding(4)
+                    .padding(5)
                     .size(13),
-                button("Load after")
-                    .on_press(Message::RuleAdd { before: false })
-                    .style(button::secondary),
-                button("Load before")
-                    .on_press(Message::RuleAdd { before: true })
-                    .style(button::secondary),
+                small_button("Load after it", Message::RuleAdd { before: false }),
+                small_button("Load before it", Message::RuleAdd { before: true }),
             ]
-            .spacing(6),
+            .spacing(6)
+            .align_y(Alignment::Center),
         )
         .into()
     }
@@ -788,41 +894,64 @@ impl Gui {
         self.selected = Some(p);
     }
 
-    fn issues_panel(&self) -> iced::widget::Container<'_, Message> {
+    fn issues_panel(&self) -> Element<'_, Message> {
         let s = &self.session;
-        let errors = s.issues.iter().filter(|i| i.severity == Severity::Error).count();
+        let errors = s
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .count();
         let warnings = s.issues.len() - errors;
+        let summary = if s.issues.is_empty() {
+            "No problems found in the load order.".to_string()
+        } else {
+            format!(
+                "{} and {}. Click one to find the mod.",
+                plural(errors, "error"),
+                plural(warnings, "warning")
+            )
+        };
         let lines = s.issues.iter().map(|i| {
-            let (tag, color) = match i.severity {
-                Severity::Error => ("error", ERROR_COLOR),
-                Severity::Warning => ("warn", WARN_COLOR),
-            };
-            row![
-                text(tag).color(color).size(13).width(44),
-                text(&i.message).size(13),
-            ]
-            .spacing(6)
+            let (glyph, color) = severity_glyph(Some(i.severity));
+            mouse_area(
+                row![
+                    text(glyph).size(11).color(color).width(14),
+                    text(&i.message).size(14)
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .interaction(iced::mouse::Interaction::Pointer)
+            .on_press(Message::SelectPackage(i.package_id.clone()))
             .into()
         });
         container(
             column![
-                text(format!("Issues — {errors} error(s), {warnings} warning(s)")).size(15),
-                scrollable(column(lines).spacing(2)).height(Length::Fill),
+                text(summary).size(15).font(theme::MEDIUM),
+                scrollable(column(lines).spacing(3).width(Length::Fill))
+                    .width(Length::Fill)
+                    .height(Length::Fill),
             ]
-            .spacing(4),
+            .spacing(6),
         )
-        .padding([4, 8])
+        .padding([10, 14])
+        .style(theme::panel)
         .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     fn status_bar(&self) -> Element<'_, Message> {
         let s = &self.session;
-        let busy = if s.is_busy() { "⏳ " } else { "" };
-        let dirty = if s.dirty { "  •  unsaved changes" } else { "" };
-        container(text(format!("{busy}{}{dirty}", s.status)).size(13))
-            .padding([4, 8])
+        let mut line = row![].spacing(8).align_y(Alignment::Center);
+        if s.is_busy() {
+            line = line.push(text("●").size(10).color(theme::VERDIGRIS));
+        }
+        line = line.push(text(&s.status).size(13));
+        container(line)
+            .padding([5, 14])
             .width(Length::Fill)
-            .style(container::dark)
+            .style(theme::status_bar)
             .into()
     }
 
@@ -831,54 +960,102 @@ impl Gui {
     fn settings_view(&self) -> Element<'_, Message> {
         let s = &self.session;
         let mut form = column![
-            text("Settings").size(22),
-            text("Instance: a new name creates one, an existing name switches, -name deletes")
-                .size(12)
-                .color(DIM_COLOR),
+            text("Settings").size(24).font(theme::SEMIBOLD),
+            text("Instance: a new name creates one, an existing name switches to it, and -name deletes it.")
+                .size(13)
+                .color(theme::DUST),
         ]
-        .spacing(10)
-        .padding(16);
+        .spacing(12)
+        .padding(20)
+        .max_width(820);
         if !s.settings.game_install_ok() {
             form = form.push(
-                text("Game install does not look like a RimWorld folder yet.").color(WARN_COLOR),
+                text("Game install doesn't look like a RimWorld folder yet. Point it at the folder that holds RimWorldWin64.exe.")
+                    .color(theme::OCHRE),
             );
         }
         // Sort mode is on the main toolbar and saves immediately, so it is not a draft field here.
         for &f in SettingsField::ALL.iter().filter(|f| !f.is_cycle()) {
-            let value = self.settings_draft.get(&f).map(String::as_str).unwrap_or("");
+            let value = self
+                .settings_draft
+                .get(&f)
+                .map(String::as_str)
+                .unwrap_or("");
             let mut input = text_input(f.label(), value)
                 .on_input(move |v| Message::SettingsEdit(f, v))
                 .on_submit(Message::SaveSettings)
-                .padding(6);
+                .padding(6)
+                .size(14);
             if matches!(f, SettingsField::SteamApiKey | SettingsField::GithubToken) {
                 input = input.secure(true);
             }
             form = form.push(
-                row![text(f.label()).width(140), input]
-                    .spacing(8)
-                    .align_y(iced::Alignment::Center),
+                row![
+                    text(f.label()).size(14).color(theme::DUST).width(150),
+                    input
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
             );
         }
-        let mut actions = row![button("Save").on_press(Message::SaveSettings)].spacing(8);
+        let mut actions = row![button("Save settings")
+            .on_press(Message::SaveSettings)
+            .style(theme::primary)]
+        .spacing(8);
         if s.settings.game_install_ok() {
             actions = actions.push(
                 button("Cancel")
                     .on_press(Message::Nav(View::Mods))
-                    .style(button::secondary),
+                    .style(theme::quiet),
             );
         }
         form = form.push(actions);
         if let Some(p) = Settings::config_file_path() {
-            form = form.push(text(format!("Stored in {}", p.display())).size(12).color(DIM_COLOR));
+            form = form.push(
+                text(format!("Saved to {}", p.display()))
+                    .size(12)
+                    .color(theme::DUST),
+            );
         }
         scrollable(form).height(Length::Fill).into()
     }
 }
 
 fn field<'a>(label: &'a str, value: String) -> Element<'a, Message> {
-    row![text(label).size(13).color(DIM_COLOR).width(90), text(value).size(13)]
-        .spacing(6)
+    row![
+        text(label).size(13).color(theme::DUST).width(100),
+        // Folder paths have no spaces to break at.
+        text(value)
+            .size(13)
+            .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+    ]
+    .spacing(8)
+    .into()
+}
+
+fn small_button(label: &str, msg: Message) -> Element<'_, Message> {
+    button(text(label).size(13))
+        .on_press(msg)
+        .padding([3, 8])
+        .style(theme::quiet)
         .into()
+}
+
+/// Shape and color together, so severity never depends on color alone.
+fn severity_glyph(severity: Option<Severity>) -> (&'static str, iced::Color) {
+    match severity {
+        Some(Severity::Error) => ("●", theme::BRICK),
+        Some(Severity::Warning) => ("▲", theme::OCHRE),
+        None => ("", theme::DUST),
+    }
+}
+
+fn plural(n: usize, word: &str) -> String {
+    if n == 1 {
+        format!("1 {word}")
+    } else {
+        format!("{n} {word}s")
+    }
 }
 
 fn source_tag(source: ModSource) -> &'static str {
