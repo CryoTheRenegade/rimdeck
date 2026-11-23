@@ -11,6 +11,8 @@ const USER_AGENT: &str = concat!("rimtui/", env!("CARGO_PKG_VERSION"));
 const QUERY_FILES_URL: &str = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/";
 const GET_DETAILS_URL: &str =
     "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/";
+const GET_COLLECTION_URL: &str =
+    "https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/";
 const TIMEOUT_SECS: u64 = 60;
 /// RankedByTextSearch
 const QUERY_TYPE_TEXT: u32 = 11;
@@ -35,6 +37,8 @@ pub struct SearchRequest {
 #[derive(Debug, Clone)]
 pub enum WorkshopMsg {
     Done(std::result::Result<Vec<WorkshopItem>, String>),
+    /// Published file IDs of a collection's items, in collection order.
+    Collection(std::result::Result<Vec<String>, String>),
 }
 
 pub fn spawn(req: SearchRequest, tx: Sender<WorkshopMsg>) {
@@ -50,6 +54,74 @@ pub fn spawn(req: SearchRequest, tx: Sender<WorkshopMsg>) {
             "could not start workshop search thread: {e}"
         ))));
     }
+}
+
+/// `123`, or a workshop URL with `?id=123`.
+pub fn parse_collection_id(input: &str) -> Option<String> {
+    let input = input.trim();
+    if is_pfid(input) {
+        return Some(input.to_string());
+    }
+    let (_, rest) = input.split_once("id=")?;
+    let id: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    is_pfid(&id).then_some(id)
+}
+
+pub fn spawn_collection(collection_id: String, tx: Sender<WorkshopMsg>) {
+    let tx_thread = tx.clone();
+    if let Err(e) = std::thread::Builder::new()
+        .name("rimtui-collection".into())
+        .spawn(move || {
+            let result = collection_items(&collection_id).map_err(|e| e.to_string());
+            let _ = tx_thread.send(WorkshopMsg::Collection(result));
+        })
+    {
+        let _ = tx.send(WorkshopMsg::Collection(Err(format!(
+            "could not start collection thread: {e}"
+        ))));
+    }
+}
+
+/// GetCollectionDetails needs no API key.
+fn collection_items(collection_id: &str) -> Result<Vec<String>> {
+    let resp = blocking_client()?
+        .post(GET_COLLECTION_URL)
+        .form(&[("collectioncount", "1"), ("publishedfileids[0]", collection_id)])
+        .send()
+        .map_err(|e| Error::Workshop(e.to_string()))?;
+    let status = resp.status();
+    let body = resp.text().map_err(|e| Error::Workshop(e.to_string()))?;
+    if !status.is_success() {
+        return Err(Error::Workshop(format!(
+            "GetCollectionDetails returned HTTP {status}"
+        )));
+    }
+    parse_collection_json(&body)
+}
+
+/// Item IDs (not nested collections) sorted by `sortorder`.
+pub fn parse_collection_json(text: &str) -> Result<Vec<String>> {
+    let value: Value =
+        serde_json::from_str(text).map_err(|e| Error::Workshop(format!("collection JSON: {e}")))?;
+    let details = value
+        .pointer("/response/collectiondetails/0")
+        .ok_or_else(|| Error::Workshop("collection not found".into()))?;
+    let Some(children) = details.get("children").and_then(Value::as_array) else {
+        return Err(Error::Workshop(
+            "not a collection, or it is private or empty".into(),
+        ));
+    };
+    let mut items: Vec<(u64, String)> = children
+        .iter()
+        .filter(|c| c.get("filetype").and_then(json_u64).unwrap_or(0) == 0)
+        .filter_map(|c| {
+            let id = json_id(c.get("publishedfileid")?)?;
+            let order = c.get("sortorder").and_then(json_u64).unwrap_or(u64::MAX);
+            Some((order, id))
+        })
+        .collect();
+    items.sort_by_key(|(order, _)| *order);
+    Ok(items.into_iter().map(|(_, id)| id).collect())
 }
 
 pub fn search(req: &SearchRequest) -> Result<Vec<WorkshopItem>> {
@@ -377,5 +449,27 @@ mod tests {
         assert_eq!(format_subs(12), "12");
         assert_eq!(format_subs(1500), "1.5k");
         assert_eq!(format_subs(12_345_678), "12.3m");
+    }
+
+    #[test]
+    fn collection_ids_and_parse() {
+        assert_eq!(parse_collection_id("2805123456").as_deref(), Some("2805123456"));
+        assert_eq!(
+            parse_collection_id(
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=2805123456&searchtext="
+            )
+            .as_deref(),
+            Some("2805123456")
+        );
+        assert_eq!(parse_collection_id("hello"), None);
+        let json = r#"{"response":{"result":1,"resultcount":1,"collectiondetails":[{
+            "publishedfileid":"9","result":1,"children":[
+              {"publishedfileid":"222","sortorder":2,"filetype":0},
+              {"publishedfileid":"111","sortorder":1,"filetype":0},
+              {"publishedfileid":"333","sortorder":3,"filetype":2}]}]}}"#;
+        assert_eq!(parse_collection_json(json).unwrap(), vec!["111", "222"]);
+        let not_collection =
+            r#"{"response":{"collectiondetails":[{"publishedfileid":"9","result":1}]}}"#;
+        assert!(parse_collection_json(not_collection).is_err());
     }
 }

@@ -837,8 +837,63 @@ impl Session {
                 events.push(Event::WorkshopResults);
             }
             Ok(WorkshopMsg::Done(Err(e))) => self.status = format!("Workshop search failed: {e}"),
+            Ok(WorkshopMsg::Collection(Ok(ids))) => self.apply_collection(&ids),
+            Ok(WorkshopMsg::Collection(Err(e))) => {
+                self.status = format!("Collection import failed: {e}")
+            }
             Err(()) => self.status = "Workshop search ended unexpectedly".into(),
         }
+    }
+
+    /// Fetch a Workshop collection (URL or ID) and activate its mods in collection order;
+    /// missing ones are downloaded with SteamCMD and activated after the rescan.
+    pub fn import_collection(&mut self, input: &str) {
+        let Some(id) = workshop::parse_collection_id(input) else {
+            self.status = "Collection: paste a collection URL or ID".into();
+            return;
+        };
+        if self.workshop_rx.is_some() {
+            self.status = "Already talking to the Steam Workshop".into();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.workshop_rx = Some(rx);
+        self.status = format!("Collection {id}: fetching items...");
+        workshop::spawn_collection(id, tx);
+    }
+
+    fn apply_collection(&mut self, ids: &[String]) {
+        let mut activated = 0;
+        let mut missing = Vec::new();
+        for id in ids {
+            let found = self
+                .mods
+                .iter()
+                .find(|m| m.published_file_id.as_deref() == Some(id.as_str()))
+                .map(|m| m.path.clone());
+            match found {
+                Some(path) if !self.is_active(&path) => {
+                    self.inactive_paths.retain(|p| p != &path);
+                    self.active_paths.push(path);
+                    activated += 1;
+                }
+                Some(_) => {}
+                None => missing.push(SteamcmdItem {
+                    published_file_id: id.clone(),
+                    activate: true,
+                }),
+            }
+        }
+        let msg = format!(
+            "Collection: {} item(s), activated {activated}, downloading {} (unsaved)",
+            ids.len(),
+            missing.len()
+        );
+        if activated > 0 {
+            self.mark_changed(&msg);
+        }
+        self.enqueue_steamcmd(missing);
+        self.status = msg;
     }
 
     /// Queue a SteamCMD download; `activate` enables the mod after the next rescan.
@@ -1584,6 +1639,20 @@ mod tests {
         assert!(s.missing_from_disk.is_empty());
         assert!(!s.issues.iter().any(|i| i.message.contains("ghost.notinstalled")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collection_activates_installed_items_in_order() {
+        let mut s = fixture_session();
+        let ws = s.mods.iter().position(|m| m.source == ModSource::Workshop).unwrap();
+        s.mods[ws].published_file_id = Some("12345".into());
+        let path = s.mods[ws].path.clone();
+        s.set_active(&path, false);
+        s.dirty = false;
+        s.apply_collection(&["12345".into()]);
+        assert_eq!(s.active_paths.last(), Some(&path));
+        assert!(s.dirty);
+        assert!(s.status.contains("activated 1, downloading 0"));
     }
 
     #[test]

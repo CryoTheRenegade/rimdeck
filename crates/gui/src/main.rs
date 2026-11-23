@@ -97,6 +97,7 @@ enum Message {
     ExportPicked(Option<PathBuf>),
     WorkshopQuery(String),
     WorkshopSearch,
+    WorkshopCollection,
     WorkshopDownload {
         id: String,
         title: String,

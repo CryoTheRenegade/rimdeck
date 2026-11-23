@@ -684,7 +684,7 @@ fn draw_workshop(frame: &mut Frame, app: &mut App) {
         Line::from(if editing {
             "Type to search  Enter run  Esc results/close"
         } else {
-            "j/k move  Enter download+enable  Space download  / query  Esc close"
+            "j/k move  Enter download+enable  Space download  c import query as collection  / query  Esc close"
         }),
         Line::from("Needs a Steam WebAPI key (p) except numeric published file IDs."),
     ];

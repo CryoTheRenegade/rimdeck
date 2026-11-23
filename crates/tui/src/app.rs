@@ -1009,6 +1009,7 @@ impl App {
             KeyCode::Enter => self.queue_workshop_download(true),
             KeyCode::Char(' ') => self.queue_workshop_download(false),
             KeyCode::Char('u') => self.queue_workshop_download(false),
+            KeyCode::Char('c') => self.session.import_collection(&self.workshop_query),
             _ => {}
         }
     }

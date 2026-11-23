@@ -15,6 +15,7 @@ impl Gui {
         match message {
             Message::WorkshopQuery(q) => self.workshop_query = q,
             Message::WorkshopSearch => s.search_workshop(&self.workshop_query),
+            Message::WorkshopCollection => s.import_collection(&self.workshop_query),
             Message::WorkshopDownload {
                 id,
                 title,
@@ -55,7 +56,7 @@ impl Gui {
         let s = &self.session;
         let search = row![
             text_input(
-                "Search the Steam Workshop, or paste a published file ID",
+                "Search the Steam Workshop, or paste a published file ID / collection URL",
                 &self.workshop_query
             )
             .on_input(Message::WorkshopQuery)
@@ -64,6 +65,9 @@ impl Gui {
             button("Search").on_press_maybe(
                 (!s.workshop_searching()).then_some(Message::WorkshopSearch)
             ),
+            button("Import as collection")
+                .on_press_maybe((!s.workshop_searching()).then_some(Message::WorkshopCollection))
+                .style(button::secondary),
         ]
         .spacing(8);
         let mut page = column![search].spacing(8).padding(12);
