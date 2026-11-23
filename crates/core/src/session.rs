@@ -63,7 +63,10 @@ pub struct Session {
     pub git_items: Vec<GitModInfo>,
     fetch_rx: Option<Receiver<FetchMsg>>,
     scan_rx: Option<Receiver<Result<ReloadData, String>>>,
-    pending_reload: bool,
+    /// The running scan keeps unsaved list edits (background rescan) instead of re-reading disk.
+    scan_keeps_edits: bool,
+    /// A scan queued behind the running one; `Some(true)` = keep edits.
+    pending_reload: Option<bool>,
     workshop_rx: Option<Receiver<WorkshopMsg>>,
     steamcmd_rx: Option<Receiver<SteamcmdMsg>>,
     pending_steamcmd: Vec<SteamcmdItem>,
@@ -181,7 +184,8 @@ impl Session {
             git_items: Vec::new(),
             fetch_rx: None,
             scan_rx: None,
-            pending_reload: false,
+            scan_keeps_edits: false,
+            pending_reload: None,
             workshop_rx: None,
             steamcmd_rx: None,
             pending_steamcmd: Vec::new(),
@@ -240,11 +244,23 @@ impl Session {
 
     // ---- scan -------------------------------------------------------------
 
+    /// Rescan and reload the mod list from ModsConfig.xml (explicit refresh, path changes).
     pub fn reload(&mut self) {
+        self.start_scan(false);
+    }
+
+    /// Rescan after mods changed on disk (downloads, updates, DB refresh); keeps unsaved edits.
+    fn rescan(&mut self) {
+        self.start_scan(true);
+    }
+
+    fn start_scan(&mut self, keep_edits: bool) {
         if self.scan_rx.is_some() {
-            self.pending_reload = true;
+            // One queued scan; it keeps edits only if every request asked for that.
+            self.pending_reload = Some(self.pending_reload.unwrap_or(true) && keep_edits);
             return;
         }
+        self.scan_keeps_edits = keep_edits;
         let (tx, rx) = mpsc::channel();
         self.status = "Scanning mods...".into();
         let settings = self.settings.clone();
@@ -277,12 +293,15 @@ impl Session {
                 return;
             }
         }
-        if std::mem::take(&mut self.pending_reload) {
-            self.reload();
+        if let Some(keep_edits) = self.pending_reload.take() {
+            self.start_scan(keep_edits);
         }
     }
 
     fn apply_reload(&mut self, data: ReloadData) {
+        // Unsaved edits survive a background rescan; mods gone from disk drop out.
+        let kept_active = (self.scan_keeps_edits && self.dirty)
+            .then(|| std::mem::take(&mut self.active_paths));
         self.mods = data.mods;
         self.community_rules = data.community_rules;
         self.user_rules = data.user_rules;
@@ -306,8 +325,19 @@ impl Session {
                 format!("; failed to read ModsConfig.xml: {e}")
             }
         };
-        self.apply_mods_config();
-        self.dirty = false;
+        match kept_active {
+            Some(active) => {
+                let active = active
+                    .into_iter()
+                    .filter(|p| self.mod_index.contains_key(p))
+                    .collect();
+                self.set_active_paths(active);
+            }
+            None => {
+                self.apply_mods_config();
+                self.dirty = false;
+            }
+        }
         let activated = self.activate_pending();
         self.refresh_issues();
         let extra = if activated > 0 {
@@ -331,23 +361,30 @@ impl Session {
 
     fn apply_mods_config(&mut self) {
         let mut used = HashSet::new();
-        self.active_paths.clear();
+        let mut active = Vec::new();
         self.missing_from_disk.clear();
         for id in &self.mods_config.active_mods {
             if let Some(m) = resolve_mod(&self.mods, id) {
                 if used.insert(m.path.clone()) {
-                    self.active_paths.push(m.path.clone());
+                    active.push(m.path.clone());
                 }
             } else {
                 self.missing_from_disk.push(id.clone());
             }
         }
+        self.set_active_paths(active);
+    }
+
+    /// Set the active order; every other scanned mod becomes inactive.
+    fn set_active_paths(&mut self, active: Vec<PathBuf>) {
+        let used: HashSet<&PathBuf> = active.iter().collect();
         self.inactive_paths = self
             .mods
             .iter()
             .filter(|m| !used.contains(&m.path))
             .map(|m| m.path.clone())
             .collect();
+        self.active_paths = active;
         self.sort_inactive();
     }
 
@@ -714,7 +751,7 @@ impl Session {
             Some(Ok(FetchMsg::Done(report))) => {
                 self.fetch_rx = None;
                 if report.any_updated() {
-                    self.reload();
+                    self.rescan();
                 } else {
                     self.status = report.status_line();
                 }
@@ -868,7 +905,7 @@ impl Session {
                     let more = std::mem::take(&mut self.pending_steamcmd);
                     self.start_steamcmd(more);
                 } else if report.any_success() {
-                    self.reload();
+                    self.rescan();
                 }
             }
             Some(Err(())) => {
@@ -1032,7 +1069,7 @@ impl Session {
         self.github_mods.remove_path(&entry.mod_path);
         if self.persist_github_mods() {
             self.status = format!("GitHub: deleted {}", entry.owner_repo);
-            self.reload();
+            self.rescan();
         }
     }
 
@@ -1111,7 +1148,7 @@ impl Session {
                     self.pending_path_activate.insert(path);
                 }
                 let warn = warning.map(|w| format!(" ({w})")).unwrap_or_default();
-                self.reload();
+                self.rescan();
                 self.status = format!("GitHub: installed {owner_repo} @{version}{warn}");
                 events.push(Event::GithubInstalled);
             }
@@ -1125,7 +1162,7 @@ impl Session {
                 let _ = self.persist_github_mods();
                 let any_success = !succeeded.is_empty();
                 if any_success {
-                    self.reload();
+                    self.rescan();
                 }
                 self.status = GithubReport::Updated { succeeded, failed }.status_line();
             }
@@ -1243,7 +1280,7 @@ impl Session {
             }
         }
         self.git_items.retain(|i| i.path != item.path);
-        self.reload();
+        self.rescan();
         self.status = format!("Git: deleted {}", item.name);
     }
 
@@ -1299,7 +1336,7 @@ impl Session {
                     self.pending_path_activate.insert(dest);
                 }
                 let warn = warning.map(|w| format!(" ({w})")).unwrap_or_default();
-                self.reload();
+                self.rescan();
                 self.status = format!("Git: cloned {origin} @{short_sha}{warn}");
                 events.push(Event::GitCloned);
             }
@@ -1319,7 +1356,7 @@ impl Session {
             GitReport::Pulled { succeeded, failed } => {
                 let any = !succeeded.is_empty();
                 if any {
-                    self.reload();
+                    self.rescan();
                 }
                 self.status = GitReport::Pulled { succeeded, failed }.status_line();
             }
@@ -1437,6 +1474,25 @@ mod tests {
         s.apply_reload(data);
         assert_eq!(s.active_paths.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn background_rescan_keeps_unsaved_edits_but_reload_does_not() {
+        let mut s = fixture_session();
+        let from_disk = s.active_paths.clone();
+        let p = s.inactive_paths[0].clone();
+        s.toggle(&p);
+
+        s.scan_keeps_edits = true;
+        s.apply_reload(collect_reload(&s.settings).unwrap());
+        assert!(s.is_active(&p));
+        assert!(s.dirty);
+        assert_eq!(s.active_paths.len() + s.inactive_paths.len(), s.mods.len());
+
+        s.scan_keeps_edits = false;
+        s.apply_reload(collect_reload(&s.settings).unwrap());
+        assert_eq!(s.active_paths, from_disk);
+        assert!(!s.dirty);
     }
 
     #[test]
