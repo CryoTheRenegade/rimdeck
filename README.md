@@ -30,7 +30,7 @@ Both frontends own a `Session`, call `poll()` on a timer, and pass explicit targ
 
 ## Look
 
-Both frontends share one palette (`crates/gui/src/theme.rs`, mirrored at the top of `crates/tui/src/ui/mod.rs`): steel panels, parchment text, verdigris for selection and primary actions, ochre for warnings and unsaved changes, brick for errors. The GUI uses Barlow Semi Condensed (SIL OFL, bundled in `crates/gui/fonts`).
+Both frontends share one palette (`crates/gui/src/theme.rs`, mirrored at the top of `crates/tui/src/ui/mod.rs`): steel panels, parchment text, verdigris for selection and primary actions, ochre for warnings and unsaved changes, brick for errors. The GUI uses [Lexend](https://www.lexend.com/) (SIL OFL, bundled in `crates/gui/fonts`).
 
 ## Build
 

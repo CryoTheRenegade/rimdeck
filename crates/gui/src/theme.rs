@@ -1,6 +1,6 @@
 //! rimdeck's look: a salvaged ship's manifest. Steel panels told apart by tone rather than
 //! boxes, warm parchment text, verdigris for "this is selected / do this", and ochre/brick
-//! only where something needs attention. Barlow Semi Condensed fits long mod names.
+//! only where something needs attention. Lexend is set for reading long lists comfortably.
 
 use iced::font::Weight;
 use iced::theme::Palette;
@@ -16,7 +16,7 @@ pub const VERDIGRIS: Color = Color::from_rgb8(0x6F, 0xA8, 0xA0);
 pub const OCHRE: Color = Color::from_rgb8(0xD8, 0xA2, 0x3E);
 pub const BRICK: Color = Color::from_rgb8(0xCF, 0x5A, 0x4A);
 
-pub const FONT: Font = Font::with_name("Barlow Semi Condensed");
+pub const FONT: Font = Font::with_name("Lexend");
 pub const MEDIUM: Font = Font {
     weight: Weight::Medium,
     ..FONT
@@ -27,9 +27,9 @@ pub const SEMIBOLD: Font = Font {
 };
 
 pub const FONT_FILES: [&[u8]; 3] = [
-    include_bytes!("../fonts/BarlowSemiCondensed-Regular.ttf"),
-    include_bytes!("../fonts/BarlowSemiCondensed-Medium.ttf"),
-    include_bytes!("../fonts/BarlowSemiCondensed-SemiBold.ttf"),
+    include_bytes!("../fonts/Lexend-Regular.ttf"),
+    include_bytes!("../fonts/Lexend-Medium.ttf"),
+    include_bytes!("../fonts/Lexend-SemiBold.ttf"),
 ];
 
 pub fn theme() -> Theme {
