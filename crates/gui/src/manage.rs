@@ -71,7 +71,7 @@ impl Gui {
         let mut page = column![search].spacing(8).padding(12);
         if s.settings.resolved_steam_api_key().is_empty() {
             page = page.push(
-                text("No Steam WebAPI key: only published file IDs work. Add a key in Settings.")
+                text("Searching by name needs a Steam WebAPI key (add one in Settings). Published file IDs and collection URLs work without one.")
                     .color(WARN_COLOR)
                     .size(13),
             );

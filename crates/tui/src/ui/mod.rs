@@ -57,7 +57,6 @@ const BRICK: Color = Color::Rgb(0xCF, 0x5A, 0x4A);
 const SELECTED: Color = Color::Rgb(0x44, 0x5A, 0x5B);
 
 const DIM: Style = Style::new().fg(DUST);
-const SELECTED_STYLE: Style = Style::new().bg(SELECTED).fg(PARCHMENT);
 
 /// A pane: thin Rivet frame, or Verdigris when it has focus.
 fn pane<'a>(title: Line<'a>, focused: bool) -> Block<'a> {
@@ -98,8 +97,8 @@ fn plural(n: usize, word: &str) -> String {
 
 fn draw_main(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-    let footer = footer_height(
-        &format!("  Unsaved changes (w saves)  {}", app.status),
+    let (status_rows, help_rows) = footer_rows(
+        &format!("  ⠋ /{}  Unsaved changes (w saves)  {}", app.search, app.status),
         &help_plain(),
         area.width,
     );
@@ -108,7 +107,7 @@ fn draw_main(frame: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Min(8),
             Constraint::Length(7),
-            Constraint::Length(footer),
+            Constraint::Length(status_rows + help_rows),
         ])
         .split(area);
 
@@ -125,7 +124,7 @@ fn draw_main(frame: &mut Frame, app: &mut App) {
     draw_list(frame, app, main[1], Pane::Active);
     draw_info(frame, app, main[2]);
     draw_warnings(frame, app, chunks[1]);
-    draw_footer(frame, app, chunks[2]);
+    draw_footer(frame, app, chunks[2], status_rows);
     app.inactive_area = main[0];
     app.active_area = main[1];
     app.info_area = main[2];
@@ -335,20 +334,32 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect, pane_kind: Pane) {
     }
     let number_width = app.active_paths.len().to_string().len();
 
+    let selected_row = selected.min(paths.len().saturating_sub(1));
     let items: Vec<ListItem> = paths
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(i, p)| {
             let Some(m) = app.mod_ref(p) else {
                 return ListItem::new(p.display().to_string());
             };
+            let (dim, body) = if i == selected_row {
+                (Style::new().fg(PARCHMENT), Style::new().fg(PARCHMENT))
+            } else {
+                (DIM, Style::new())
+            };
             let mut spans = Vec::with_capacity(5);
             if let Some(n) = positions.get(p) {
-                spans.push(Span::styled(format!("{n:>number_width$} "), DIM));
-                spans.push(severity_glyph(worst.get(m.package_id.as_str()).copied()));
+                spans.push(Span::styled(format!("{n:>number_width$} "), dim));
+                let mut glyph = severity_glyph(worst.get(m.package_id.as_str()).copied());
+                if i == selected_row {
+                    // Brick is too faint on the selection; the glyph's shape still tells severity.
+                    glyph.style = glyph.style.fg(PARCHMENT);
+                }
+                spans.push(glyph);
                 spans.push(Span::raw(" "));
             }
-            spans.push(Span::styled(format!("{:<4}", source_tag(m.source)), DIM));
-            spans.push(Span::raw(m.name.clone()));
+            spans.push(Span::styled(format!("{:<4}", source_tag(m.source)), dim));
+            spans.push(Span::styled(m.name.clone(), body));
             ListItem::new(Line::from(spans))
         })
         .collect();
@@ -357,7 +368,7 @@ fn draw_list(frame: &mut Frame, app: &mut App, area: Rect, pane_kind: Pane) {
         .block(pane(heading, focused))
         // Full selection color only where the keys go; the other list keeps a quiet marker.
         .highlight_style(if focused {
-            SELECTED_STYLE
+            Style::new().bg(SELECTED)
         } else {
             Style::new().bg(PLATE)
         })
@@ -429,8 +440,13 @@ fn draw_warnings(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Status on one line, key help under it, on a Plate band without a frame.
-fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_footer(frame: &mut Frame, app: &App, area: Rect, status_rows: u16) {
     let mut status = vec![Span::raw(" ")];
+    // The query goes first so a long status message can never push it out of view.
+    if app.input_mode == InputMode::Search || !app.search.is_empty() {
+        status.push(Span::styled("/", KEY_STYLE));
+        status.push(Span::raw(format!("{}  ", app.search)));
+    }
     if app.is_busy() {
         status.push(Span::styled(
             format!("{} ", app.spinner_glyph()),
@@ -444,19 +460,19 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
     status.push(Span::raw(app.status.as_str()));
-    if app.input_mode == InputMode::Search || !app.search.is_empty() {
-        status.push(Span::raw("  "));
-        status.push(Span::styled("/", KEY_STYLE));
-        status.push(Span::raw(app.search.as_str()));
-    }
     let mut help = vec![Span::raw(" ")];
     help.extend(help_spans());
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(status), Line::from(help)])
-            .wrap(Wrap { trim: false })
-            .style(Style::new().bg(PLATE).fg(PARCHMENT)),
-        area,
-    );
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(status_rows), Constraint::Min(1)])
+        .split(area);
+    let band = Style::new().bg(PLATE).fg(PARCHMENT);
+    for (line, rect) in [(Line::from(status), rows[0]), (Line::from(help), rows[1])] {
+        frame.render_widget(
+            Paragraph::new(line).wrap(Wrap { trim: false }).style(band),
+            rect,
+        );
+    }
 }
 
 const KEY_STYLE: Style = Style::new().fg(VERDIGRIS).add_modifier(Modifier::BOLD);
@@ -509,10 +525,12 @@ fn help_spans() -> Vec<Span<'static>> {
 }
 
 /// Status line(s) plus the wrapped key help, capped so the lists keep room.
-fn footer_height(status: &str, help: &str, width: u16) -> u16 {
+fn footer_rows(status: &str, help: &str, width: u16) -> (u16, u16) {
     let width = width.saturating_sub(1).max(1) as usize;
-    let status = (wrap_line_count(status, width) as u16).clamp(1, 2);
-    status + (wrap_line_count(help, width) as u16).clamp(1, 4)
+    (
+        (wrap_line_count(status, width) as u16).clamp(1, 2),
+        (wrap_line_count(help, width) as u16).clamp(1, 4),
+    )
 }
 
 fn wrap_line_count(text: &str, width: usize) -> usize {
@@ -1114,10 +1132,10 @@ mod tests {
     fn footer_grows_then_caps() {
         let help = help_plain();
         let wide = help.chars().count() as u16 + 10;
-        assert_eq!(footer_height("ok", &help, wide), 2);
-        let tall = footer_height("ok", &help, 20);
-        assert!(tall > 2);
-        assert!(tall <= 6);
+        assert_eq!(footer_rows("ok", &help, wide), (1, 1));
+        let (status, help_rows) = footer_rows("ok", &help, 20);
+        assert_eq!(status, 1);
+        assert!(help_rows > 1 && help_rows <= 4);
     }
 
     #[test]

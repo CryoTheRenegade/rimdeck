@@ -35,7 +35,12 @@ fn main() -> iced::Result {
         .font(theme::FONT_FILES[1])
         .font(theme::FONT_FILES[2])
         .default_font(theme::FONT)
-        .window_size((1400.0, 860.0))
+        // Below this the toolbar and the three panes start squeezing each other.
+        .window(iced::window::Settings {
+            size: iced::Size::new(1400.0, 860.0),
+            min_size: Some(iced::Size::new(1000.0, 540.0)),
+            ..Default::default()
+        })
         .run()
 }
 
@@ -76,6 +81,10 @@ struct Gui {
     git_query: String,
     /// packageId typed into the rule editor in the info panel.
     rule_input: String,
+    /// The second toolbar row with occasional tools is showing.
+    tools_open: bool,
+    /// "Deactivate all mods" was pressed once; the next press clears the load order.
+    confirm_clear: bool,
 }
 
 /// Keyboard shortcuts on the Mods tab.
@@ -116,6 +125,8 @@ enum Message {
     /// Clicked issue: select the mod with this packageId.
     SelectPackage(String),
     BuildDb,
+    Tool(Tool),
+    ToggleTools,
     Textures {
         clean: bool,
     },
@@ -171,6 +182,48 @@ enum Message {
     GitDelete(PathBuf),
 }
 
+/// Occasional actions, behind "More tools" so the toolbar fits and the bulk clear sits apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tool {
+    UpdateDatabases,
+    BuildSteamDb,
+    OptimizeTextures,
+    RemoveDds,
+    DeactivateAll,
+}
+
+impl Tool {
+    const ALL: [Tool; 5] = [
+        Tool::UpdateDatabases,
+        Tool::BuildSteamDb,
+        Tool::OptimizeTextures,
+        Tool::RemoveDds,
+        Tool::DeactivateAll,
+    ];
+
+    fn message(self) -> Message {
+        match self {
+            Tool::UpdateDatabases => Message::FetchDbs,
+            Tool::BuildSteamDb => Message::BuildDb,
+            Tool::OptimizeTextures => Message::Textures { clean: false },
+            Tool::RemoveDds => Message::Textures { clean: true },
+            Tool::DeactivateAll => Message::Clear,
+        }
+    }
+}
+
+impl std::fmt::Display for Tool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Tool::UpdateDatabases => "Update databases",
+            Tool::BuildSteamDb => "Build Steam DB",
+            Tool::OptimizeTextures => "Optimize textures",
+            Tool::RemoveDds => "Remove DDS",
+            Tool::DeactivateAll => "Deactivate all mods",
+        })
+    }
+}
+
 impl Gui {
     fn boot() -> (Self, Task<Message>) {
         let settings = Settings::load().unwrap_or_else(|e| {
@@ -197,6 +250,8 @@ impl Gui {
             github_query: String::new(),
             git_query: String::new(),
             rule_input: String::new(),
+            tools_open: false,
+            confirm_clear: false,
         };
         if view == View::Settings {
             gui.open_settings();
@@ -233,6 +288,13 @@ impl Gui {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // Any other action disarms the two-press confirmations.
+        if !matches!(message, Message::Refresh | Message::Tick) {
+            self.confirm_refresh = false;
+        }
+        if !matches!(message, Message::Tool(Tool::DeactivateAll) | Message::Tick) {
+            self.confirm_clear = false;
+        }
         match message {
             Message::ImportList => Task::perform(
                 rfd::AsyncFileDialog::new()
@@ -266,9 +328,21 @@ impl Gui {
                 self.reveal()
             }
             Message::SelectPackage(pid) => {
-                if let Some(p) = self.find_package(&pid) {
-                    self.select(p);
+                let Some(p) = self.find_package(&pid) else {
+                    self.session.status =
+                        format!("{pid} isn't installed, so there is nothing to show");
+                    return Task::none();
+                };
+                // A filter that hides the target would leave the details changed but the row unseen.
+                let active = self.session.is_active(&p);
+                if !self.visible(active).contains(&p) {
+                    if active {
+                        self.active_search.clear();
+                    } else {
+                        self.inactive_search.clear();
+                    }
                 }
+                self.select(p);
                 self.reveal()
             }
             Message::SearchSubmit(active) => {
@@ -348,13 +422,18 @@ impl Gui {
     }
 
     fn apply(&mut self, message: Message) {
-        if !matches!(message, Message::Refresh | Message::Tick) {
-            self.confirm_refresh = false;
-        }
         let s = &mut self.session;
         match message {
             Message::Key(_) | Message::SearchSubmit(_) | Message::SelectPackage(_) => {} // handled in `update`
             Message::BuildDb => s.build_db(),
+            Message::ToggleTools => self.tools_open = !self.tools_open,
+            // The armed button's own label asks for confirmation; no status text to go stale.
+            Message::Tool(Tool::DeactivateAll) if !self.confirm_clear => self.confirm_clear = true,
+            Message::Tool(tool) => {
+                self.tools_open = false;
+                self.confirm_clear = false;
+                self.apply(tool.message());
+            }
             Message::Textures { clean } => s.optimize_textures(clean),
             Message::Tick => {
                 for ev in s.poll() {
@@ -397,7 +476,6 @@ impl Gui {
             Message::Refresh => {
                 if s.dirty && !self.confirm_refresh {
                     self.confirm_refresh = true;
-                    s.status = "Unsaved changes: press Refresh again to discard them".into();
                 } else {
                     self.confirm_refresh = false;
                     s.reload();
@@ -521,31 +599,42 @@ impl Gui {
 
     fn main_view(&self) -> Element<'_, Message> {
         let s = &self.session;
-        let save = if s.dirty {
-            button("Save changes")
-                .on_press(Message::Save)
-                .style(theme::attention)
+        // Fixed widths: a label that grows with state would shift its neighbours under the pointer.
+        let save = fixed_button(if s.dirty { "Save changes" } else { "Save" }, 140.0)
+            .on_press(Message::Save)
+            .style(if s.dirty {
+                theme::attention
+            } else {
+                theme::quiet
+            });
+        let reload = fixed_button(
+            if self.confirm_refresh {
+                "Discard changes?"
+            } else {
+                "Reload"
+            },
+            160.0,
+        )
+        .on_press(Message::Refresh)
+        .style(if self.confirm_refresh {
+            theme::danger
         } else {
-            button("Save").on_press(Message::Save).style(theme::quiet)
-        };
-        let reload = if self.confirm_refresh {
-            button("Discard changes and reload")
-                .on_press(Message::Refresh)
-                .style(theme::danger)
-        } else {
-            button("Reload")
-                .on_press(Message::Refresh)
-                .style(theme::quiet)
-        };
+            theme::quiet
+        });
         let tools = [
             ("Import list…", Message::ImportList),
             ("Export list…", Message::ExportList),
-            ("Update databases", Message::FetchDbs),
-            ("Build Steam DB", Message::BuildDb),
-            ("Optimize textures", Message::Textures { clean: false }),
-            ("Remove DDS", Message::Textures { clean: true }),
         ]
         .map(|(label, msg)| button(label).on_press(msg).style(theme::subtle).into());
+        // A button, not a pick_list: pick_list fires an option on Ctrl+scroll while closed.
+        // Same label open or closed, so the toolbar never shifts (see fixed_button).
+        let more = button("More tools")
+            .on_press(Message::ToggleTools)
+            .style(if self.tools_open {
+                theme::quiet
+            } else {
+                theme::subtle
+            });
         let toolbar = row![
             button("Sort").on_press(Message::Sort).style(theme::primary),
             pick_list(
@@ -557,6 +646,7 @@ impl Gui {
             reload,
             space::horizontal(),
             row(tools).spacing(6),
+            more,
             button("Run game")
                 .on_press(Message::Launch)
                 .style(theme::primary),
@@ -572,15 +662,48 @@ impl Gui {
         ]
         .spacing(10)
         .padding([0, 12])
-        .height(Length::FillPortion(4));
+        // 3:1 leaves the problems panel a summary plus rows even at the minimum window height.
+        .height(Length::FillPortion(3));
 
-        column![
-            toolbar,
-            lists,
-            container(self.issues_panel())
-                .padding([10, 12])
-                .height(Length::FillPortion(1)),
-        ]
+        let mut page = column![toolbar];
+        if self.tools_open {
+            let mut tools = row![].spacing(8).padding(iced::Padding {
+                bottom: 10.0,
+                ..iced::Padding::from([0, 12])
+            });
+            for tool in Tool::ALL {
+                if tool == Tool::DeactivateAll {
+                    let label = if self.confirm_clear {
+                        "Confirm: deactivate all".to_string()
+                    } else {
+                        tool.to_string()
+                    };
+                    tools = tools.push(space::horizontal()).push(
+                        button(text(label))
+                            .on_press(Message::Tool(tool))
+                            .style(theme::danger),
+                    );
+                } else {
+                    tools = tools.push(
+                        button(text(tool.to_string()))
+                            .on_press(Message::Tool(tool))
+                            .style(theme::subtle),
+                    );
+                }
+            }
+            page = page.push(tools);
+        } else {
+            page = page.push(space::vertical().height(0));
+        }
+        page.push(
+            column![
+                lists,
+                container(self.issues_panel())
+                    .padding([10, 12])
+                    .height(Length::FillPortion(1)),
+            ]
+            .height(Length::Fill),
+        )
         .height(Length::Fill)
         .into()
     }
@@ -633,8 +756,7 @@ impl Gui {
         if active {
             header = header
                 .push(small_button("Move up", Message::MoveSelected(-1)))
-                .push(small_button("Move down", Message::MoveSelected(1)))
-                .push(small_button("Deactivate all", Message::Clear));
+                .push(small_button("Move down", Message::MoveSelected(1)));
         }
         column![
             header,
@@ -839,6 +961,18 @@ impl Gui {
             top: 8.0,
             ..iced::Padding::ZERO
         });
+        for (pinned, place) in [
+            (s.community_rules.load_top(&m.package_id), "top"),
+            (s.community_rules.load_bottom(&m.package_id), "bottom"),
+        ] {
+            if pinned {
+                col = col.push(
+                    text(format!("Always loads at the {place} (community rule)"))
+                        .size(13)
+                        .color(theme::DUST),
+                );
+            }
+        }
         for (ids, before) in [(c_after, false), (c_before, true)] {
             for id in ids {
                 let kind = if before { "before" } else { "after" };
@@ -1012,7 +1146,7 @@ impl Gui {
         form = form.push(actions);
         if let Some(p) = Settings::config_file_path() {
             form = form.push(
-                text(format!("Saved to {}", p.display()))
+                text(format!("Settings file: {}", p.display()))
                     .size(12)
                     .color(theme::DUST),
             );
@@ -1031,6 +1165,15 @@ fn field<'a>(label: &'a str, value: String) -> Element<'a, Message> {
     ]
     .spacing(8)
     .into()
+}
+
+fn fixed_button(label: &str, width: f32) -> iced::widget::Button<'_, Message> {
+    button(
+        text(label)
+            .width(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Center),
+    )
+    .width(width)
 }
 
 fn small_button(label: &str, msg: Message) -> Element<'_, Message> {

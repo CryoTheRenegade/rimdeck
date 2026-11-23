@@ -142,9 +142,11 @@ pub fn subtle(_: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// Destructive actions (delete, discard).
+/// Destructive actions: brick outline, parchment label (brick text is too dim on Hull).
 pub fn danger(_: &Theme, status: button::Status) -> button::Style {
-    outlined(BRICK, status)
+    let mut style = outlined(PARCHMENT, status);
+    style.border.color = BRICK;
+    style
 }
 
 /// Bare text buttons: tabs and inline ✕.
