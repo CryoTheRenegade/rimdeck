@@ -68,6 +68,8 @@ pub enum InputMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathPromptKind {
     Export,
+    /// `a <id>` / `b <id>` add a user loadAfter / loadBefore rule; `-a` / `-b` remove.
+    Rule,
 }
 
 /// Terminal frontend state. Domain state lives in `session`; `Deref` lets the drawing
@@ -441,7 +443,37 @@ impl App {
         }
         match self.path_prompt {
             PathPromptKind::Export => self.session.export_list(Path::new(&raw)),
+            PathPromptKind::Rule => self.apply_rule_command(&raw),
         }
+    }
+
+    fn start_rule_prompt(&mut self) {
+        let Some(pid) = self.selected_mod().map(|m| m.package_id.clone()) else {
+            self.session.status = "No mod selected".into();
+            return;
+        };
+        self.path_prompt = PathPromptKind::Rule;
+        self.edit_buffer.clear();
+        self.input_mode = InputMode::PathPrompt;
+        self.session.status = format!("Rule for {pid}");
+    }
+
+    fn apply_rule_command(&mut self, command: &str) {
+        let Some(pid) = self.selected_mod().map(|m| m.package_id.clone()) else {
+            return;
+        };
+        let (verb, other) = command.split_once(' ').unwrap_or((command, ""));
+        let (before, on) = match verb {
+            "a" => (false, true),
+            "b" => (true, true),
+            "-a" => (false, false),
+            "-b" => (true, false),
+            _ => {
+                self.session.status = "Rule: use a <id>, b <id>, -a <id> or -b <id>".into();
+                return;
+            }
+        };
+        self.session.set_user_order_rule(&pid, other, before, on);
     }
 
     fn launch_rimworld(&mut self) {
@@ -951,6 +983,7 @@ impl App {
             KeyCode::Char('e') => self.start_export(),
             KeyCode::Char('g') => self.launch_rimworld(),
             KeyCode::Char('t') => self.toggle_user_load_top(),
+            KeyCode::Char('R') => self.start_rule_prompt(),
             KeyCode::Char('b') => self.toggle_user_load_bottom(),
             KeyCode::Char('d') => self.start_fetch(false),
             KeyCode::Char('n') => self.open_workshop_search(),

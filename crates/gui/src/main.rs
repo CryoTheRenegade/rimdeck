@@ -68,6 +68,8 @@ struct Gui {
     workshop_query: String,
     github_query: String,
     git_query: String,
+    /// packageId typed into the rule editor in the info panel.
+    rule_input: String,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +90,9 @@ enum Message {
     UpdateSelected,
     ToggleLoadTop,
     ToggleLoadBottom,
+    RuleInput(String),
+    RuleAdd { before: bool },
+    RuleRemove { other: String, before: bool },
     Nav(View),
     SettingsEdit(SettingsField, String),
     SaveSettings,
@@ -142,6 +147,7 @@ impl Gui {
             workshop_query: String::new(),
             github_query: String::new(),
             git_query: String::new(),
+            rule_input: String::new(),
         };
         if view == View::Settings {
             gui.open_settings();
@@ -270,6 +276,18 @@ impl Gui {
                     s.toggle_user_load_top(&pid);
                 } else {
                     s.toggle_user_load_bottom(&pid);
+                }
+            }
+            Message::RuleInput(v) => self.rule_input = v,
+            Message::RuleAdd { before } => {
+                if let Some(pid) = self.selected_package_id() {
+                    let other = std::mem::take(&mut self.rule_input);
+                    self.session.set_user_order_rule(&pid, &other, before, true);
+                }
+            }
+            Message::RuleRemove { other, before } => {
+                if let Some(pid) = self.selected_package_id() {
+                    self.session.set_user_order_rule(&pid, &other, before, false);
                 }
             }
             Message::Nav(View::Settings) => self.open_settings(),
@@ -557,12 +575,64 @@ impl Gui {
             .spacing(6)
             .wrap(),
         );
+        col = col.push(self.rules_editor(m));
         col = col.push(rule::horizontal(1)).push(text(&m.description).size(13));
         container(scrollable(col))
             .style(container::bordered_box)
             .height(Length::Fill)
             .width(Length::Fill)
             .into()
+    }
+
+    fn selected_package_id(&self) -> Option<String> {
+        let p = self.selected.as_ref()?;
+        self.session.mod_ref(p).map(|m| m.package_id.clone())
+    }
+
+    /// Community rules (read-only) and user rules (removable) plus an add row.
+    fn rules_editor<'a>(&'a self, m: &'a Mod) -> Element<'a, Message> {
+        let s = &self.session;
+        let (c_after, c_before) = s.community_rules.order_rules(&m.package_id);
+        let (u_after, u_before) = s.user_rules.order_rules(&m.package_id);
+        let mut col = column![text("Load order rules").size(15)].spacing(4);
+        for (ids, before) in [(c_after, false), (c_before, true)] {
+            for id in ids {
+                let kind = if before { "before" } else { "after" };
+                col = col.push(text(format!("community: load {kind} {id}")).size(12).color(DIM_COLOR));
+            }
+        }
+        for (ids, before) in [(u_after, false), (u_before, true)] {
+            for id in ids {
+                let kind = if before { "before" } else { "after" };
+                col = col.push(
+                    row![
+                        text(format!("yours: load {kind} {id}")).size(13),
+                        button("✕")
+                            .on_press(Message::RuleRemove { other: id, before })
+                            .padding([0, 6])
+                            .style(button::text),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
+        }
+        col.push(
+            row![
+                text_input("another mod's packageId", &self.rule_input)
+                    .on_input(Message::RuleInput)
+                    .padding(4)
+                    .size(13),
+                button("Load after")
+                    .on_press(Message::RuleAdd { before: false })
+                    .style(button::secondary),
+                button("Load before")
+                    .on_press(Message::RuleAdd { before: true })
+                    .style(button::secondary),
+            ]
+            .spacing(6),
+        )
+        .into()
     }
 
     fn preview(&self, m: &Mod) -> Option<image::Handle> {

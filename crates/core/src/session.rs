@@ -698,6 +698,23 @@ impl Session {
         }
     }
 
+    /// Add/remove a user rule "`package_id` loads after (or before) `other`", then rescan
+    /// so the merged About.xml + community + user rules are rebuilt (unsaved edits kept).
+    pub fn set_user_order_rule(&mut self, package_id: &str, other: &str, before: bool, on: bool) {
+        let other = other.trim();
+        if other.is_empty() || other.eq_ignore_ascii_case(package_id) {
+            self.status = "Rule: enter another mod's packageId".into();
+            return;
+        }
+        self.user_rules.set_order_rule(package_id, other, before, on);
+        if !self.persist_user_rules() {
+            return;
+        }
+        let kind = if before { "loadBefore" } else { "loadAfter" };
+        let verb = if on { "added" } else { "removed" };
+        self.rescan_then(format!("user {kind} {other} {verb} for {package_id}"));
+    }
+
     pub fn toggle_user_load_top(&mut self, package_id: &str) {
         let next = !self.user_rules.load_top(package_id);
         self.user_rules.set_load_top(package_id, next);

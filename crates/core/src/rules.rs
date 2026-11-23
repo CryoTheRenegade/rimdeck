@@ -149,6 +149,37 @@ impl RulesDb {
         self.prune_empty(&id);
     }
 
+    /// Add or remove "`package_id` loads after (or before) `other`".
+    pub fn set_order_rule(&mut self, package_id: &str, other: &str, before: bool, on: bool) {
+        self.timestamp = unix_timestamp();
+        let id = package_id.to_ascii_lowercase();
+        let other = other.trim().to_ascii_lowercase();
+        let rule = self.rule_mut(&id);
+        let map = if before {
+            &mut rule.load_before
+        } else {
+            &mut rule.load_after
+        };
+        if on {
+            map.entry(other).or_default();
+        } else {
+            map.remove(&other);
+        }
+        self.prune_empty(&id);
+    }
+
+    /// Sorted (loadAfter, loadBefore) package IDs for one mod.
+    pub fn order_rules(&self, package_id: &str) -> (Vec<String>, Vec<String>) {
+        let sorted = |m: &HashMap<String, SubRule>| {
+            let mut v: Vec<String> = m.keys().cloned().collect();
+            v.sort();
+            v
+        };
+        self.get(package_id)
+            .map(|r| (sorted(&r.load_after), sorted(&r.load_before)))
+            .unwrap_or_default()
+    }
+
     fn prune_empty(&mut self, package_id: &str) {
         if self
             .rules
@@ -407,5 +438,19 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("loadBottom"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn order_rules_add_remove_and_prune() {
+        let mut db = RulesDb::default();
+        db.set_order_rule("A.Mod", "B.Mod", false, true);
+        db.set_order_rule("a.mod", "c.mod", true, true);
+        assert_eq!(
+            db.order_rules("a.mod"),
+            (vec!["b.mod".to_string()], vec!["c.mod".to_string()])
+        );
+        db.set_order_rule("a.mod", "b.mod", false, false);
+        db.set_order_rule("a.mod", "c.mod", true, false);
+        assert!(db.rules.is_empty(), "empty entry is pruned");
     }
 }

@@ -363,6 +363,7 @@ const HELP_KEYS: &[(&str, &str)] = &[
     ("Enter", "on/off"),
     ("Ctrl+j/k", "reorder"),
     ("t/b", "top/bottom"),
+    ("R", "rule"),
     ("s", "sort"),
     ("S", "mode"),
     ("w", "save"),
@@ -949,8 +950,19 @@ fn draw_git(frame: &mut Frame, app: &mut App) {
 fn draw_path_prompt(frame: &mut Frame, app: &App) {
     let area = centered(frame.area(), 80, 10);
     frame.render_widget(Clear, area);
-    let (title, action) = match app.path_prompt {
-        PathPromptKind::Export => ("Export mod list", "Enter write  Esc cancel"),
+    let rule_hint;
+    let (title, action, label) = match app.path_prompt {
+        PathPromptKind::Export => ("Export mod list", "Enter write  Esc cancel", "Path"),
+        PathPromptKind::Rule => {
+            let pid = app.selected_mod().map(|m| m.package_id.as_str()).unwrap_or("");
+            let (after, before) = app.user_rules.order_rules(pid);
+            rule_hint = format!(
+                "a <id> load after · b <id> load before · -a / -b <id> remove · Esc cancel  ·  yours: after [{}]  before [{}]",
+                after.join(", "),
+                before.join(", ")
+            );
+            ("User load-order rule for the selected mod", rule_hint.as_str(), "Rule")
+        }
     };
     let lines = vec![
         Line::from(Span::styled(
@@ -961,7 +973,7 @@ fn draw_path_prompt(frame: &mut Frame, app: &App) {
         )),
         Line::from(action),
         Line::from(""),
-        Line::from(format!("Path: {}█", app.edit_buffer)),
+        Line::from(format!("{label}: {}█", app.edit_buffer)),
     ];
     frame.render_widget(
         Paragraph::new(lines)
@@ -994,6 +1006,7 @@ rimtui — RimSort-style RimWorld mod manager
   G               git clone / pull HEAD (GitLab, GitGud, Forgejo, …)
   u               SteamCMD, GitHub, or git pull selected mod
   t / b           user loadTop / loadBottom (saved)
+  R               user loadAfter / loadBefore rule for selected mod
   r               rescan mods
   p               path / database / SteamCMD / API keys
   mouse wheel     slow for 1–2 clicks, faster if you keep scrolling
