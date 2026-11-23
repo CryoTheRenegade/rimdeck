@@ -936,6 +936,8 @@ dependencies = [
 [[package]]
 name = "ddsify"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c256b0e20f62a3f25a04709ab76bdaf8bb74d2978c851e3ab62b7ea346d072dc"
 dependencies = [
  "ddsfile",
  "image",

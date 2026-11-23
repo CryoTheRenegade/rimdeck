@@ -9,8 +9,8 @@ license = "GPL-3.0-only"
 
 [workspace.dependencies]
 rimtui-core = { path = "crates/core" }
-# Texture optimizer (todds replacement); a sibling checkout of the rimdds repo.
-ddsify = { path = "../../rimdds", default-features = false }
+# Texture optimizer (todds replacement).
+ddsify = { version = "0.1", default-features = false }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

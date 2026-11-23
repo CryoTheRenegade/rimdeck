@@ -14,7 +14,7 @@ GUI: RimSort-style main window (mod info with preview, inactive/active lists wit
 
 Both frontends also have: a per-mod rule editor (user loadAfter/loadBefore/loadTop/loadBottom in `userRules.json`), duplicate-install and game-version warnings, Steam Workshop collection import, and instances (named sets of game/mods/workshop/config paths, picked with the Instance setting: a new name creates one, an existing name switches, `-name` deletes).
 
-Texture optimization (RimSort's todds feature) uses [ddsify](../../rimdds): `Textures` PNGs in active non-DLC mods become BC1/BC7 DDS with mipmaps, re-encoded only when the PNG is newer. "Delete DDS" removes DDS files that sit next to a PNG. Building needs the `rimdds` repo checked out next to this one (`../../rimdds` from the workspace root).
+Texture optimization (RimSort's todds feature) uses [ddsify](https://crates.io/crates/ddsify): `Textures` PNGs in active non-DLC mods become BC1/BC7 DDS with mipmaps, re-encoded only when the PNG is newer. "Delete DDS" removes DDS files that sit next to a PNG.
 
 `rimtui build-db [--out PATH] [--no-deps]` merges installed mods into `steamDB.json` (with a Steam WebAPI key it also fetches Workshop "required items" as dependencies).
 
