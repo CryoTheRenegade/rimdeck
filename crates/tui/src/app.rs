@@ -85,6 +85,8 @@ pub struct App {
     pub active_state: ListState,
     pub search: String,
     pub should_quit: bool,
+    /// `r` was pressed once with unsaved edits; the next `r` discards them.
+    confirm_refresh: bool,
     pub warning_scroll: u16,
     pub info_scroll: u16,
     pub info_area: Rect,
@@ -164,6 +166,7 @@ impl App {
             active_state: ListState::default(),
             search: String::new(),
             should_quit: false,
+            confirm_refresh: false,
             warning_scroll: 0,
             info_scroll: 0,
             info_area: Rect::default(),
@@ -907,6 +910,7 @@ impl App {
     }
 
     fn handle_main_key(&mut self, key: KeyEvent) {
+        let refresh_armed = std::mem::take(&mut self.confirm_refresh);
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('j') => self.reorder_active(1),
@@ -945,6 +949,10 @@ impl App {
             KeyCode::Char('h') => self.open_github(),
             KeyCode::Char('G') => self.open_git(),
             KeyCode::Char('u') => self.update_selected_mod(),
+            KeyCode::Char('r') if self.session.dirty && !refresh_armed => {
+                self.confirm_refresh = true;
+                self.session.status = "Unsaved changes: press r again to discard them".into();
+            }
             KeyCode::Char('r') => self.reload(),
             KeyCode::Char('p') => {
                 self.screen = Screen::Settings;

@@ -2,6 +2,8 @@
 //!
 //! Inspired by RimSort (https://github.com/RimSort/RimSort).
 
+mod manage;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -33,8 +35,21 @@ fn main() -> iced::Result {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum View {
-    Main,
+    Mods,
+    Workshop,
+    Github,
+    Git,
     Settings,
+}
+
+impl View {
+    const TABS: [(View, &'static str); 5] = [
+        (View::Mods, "Mods"),
+        (View::Workshop, "Workshop"),
+        (View::Github, "GitHub"),
+        (View::Git, "Git"),
+        (View::Settings, "Settings"),
+    ];
 }
 
 struct Gui {
@@ -46,6 +61,13 @@ struct Gui {
     /// Text being edited on the settings page, one per `SettingsField`.
     settings_draft: HashMap<SettingsField, String>,
     previews: HashMap<PathBuf, Option<image::Handle>>,
+    /// Refresh was pressed once with unsaved edits; the next press discards them.
+    confirm_refresh: bool,
+    /// Folder armed for deletion; a second Delete press on the same row removes it.
+    confirm_delete: Option<PathBuf>,
+    workshop_query: String,
+    github_query: String,
+    git_query: String,
 }
 
 #[derive(Debug, Clone)]
@@ -66,10 +88,32 @@ enum Message {
     UpdateSelected,
     ToggleLoadTop,
     ToggleLoadBottom,
-    OpenSettings,
-    CloseSettings,
+    Nav(View),
     SettingsEdit(SettingsField, String),
     SaveSettings,
+    ImportList,
+    ExportList,
+    ImportPicked(Option<PathBuf>),
+    ExportPicked(Option<PathBuf>),
+    WorkshopQuery(String),
+    WorkshopSearch,
+    WorkshopDownload {
+        id: String,
+        title: String,
+        activate: bool,
+    },
+    GithubQuery(String),
+    GithubInstall,
+    GithubCheck,
+    GithubUpdate(PathBuf),
+    GithubToggleAuto(PathBuf),
+    GithubDelete(PathBuf),
+    GitQuery(String),
+    GitClone,
+    GitCheck,
+    GitPullBehind,
+    GitPull(PathBuf),
+    GitDelete(PathBuf),
 }
 
 impl Gui {
@@ -80,18 +124,23 @@ impl Gui {
         });
         let mut session = Session::new(settings);
         let view = if session.start() {
-            View::Main
+            View::Mods
         } else {
             View::Settings
         };
         let mut gui = Self {
             session,
-            view: View::Main,
+            view: View::Mods,
             selected: None,
             inactive_search: String::new(),
             active_search: String::new(),
             settings_draft: HashMap::new(),
             previews: HashMap::new(),
+            confirm_refresh: false,
+            confirm_delete: None,
+            workshop_query: String::new(),
+            github_query: String::new(),
+            git_query: String::new(),
         };
         if view == View::Settings {
             gui.open_settings();
@@ -122,19 +171,59 @@ impl Gui {
         self.view = View::Settings;
     }
 
-    fn update(&mut self, message: Message) {
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::ImportList => Task::perform(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("Mod list", &["xml"])
+                    .set_directory(Settings::default_lists_dir())
+                    .pick_file(),
+                |f| Message::ImportPicked(f.map(|f| f.path().to_path_buf())),
+            ),
+            Message::ExportList => Task::perform(
+                rfd::AsyncFileDialog::new()
+                    .add_filter("Mod list", &["xml"])
+                    .set_directory(Settings::default_lists_dir())
+                    .set_file_name("modlist.xml")
+                    .save_file(),
+                |f| Message::ExportPicked(f.map(|f| f.path().to_path_buf())),
+            ),
+            other => {
+                self.apply(other);
+                Task::none()
+            }
+        }
+    }
+
+    fn apply(&mut self, message: Message) {
+        if !matches!(message, Message::Refresh | Message::Tick) {
+            self.confirm_refresh = false;
+        }
         let s = &mut self.session;
         match message {
             Message::Tick => {
-                if s.poll().contains(&session::Event::Reloaded) {
-                    self.previews.clear();
-                    if let Some(p) = self.selected.take() {
-                        if self.session.mod_ref(&p).is_some() {
-                            self.select(p);
+                for ev in s.poll() {
+                    match ev {
+                        session::Event::Reloaded => {
+                            self.previews.clear();
+                            if let Some(p) = self.selected.take() {
+                                if self.session.mod_ref(&p).is_some() {
+                                    self.select(p);
+                                }
+                            }
                         }
+                        session::Event::GithubInstalled => self.github_query.clear(),
+                        session::Event::GitCloned => self.git_query.clear(),
+                        session::Event::WorkshopResults => {}
                     }
                 }
             }
+            Message::ImportList | Message::ExportList => {} // handled in `update`
+            Message::ImportPicked(Some(p)) => {
+                s.load_list(&p);
+            }
+            Message::ExportPicked(Some(p)) => s.export_list(&p),
+            Message::ImportPicked(None) | Message::ExportPicked(None) => {}
             Message::Select(p) => self.select(p),
             Message::Toggle(p) => {
                 s.toggle(&p);
@@ -150,7 +239,15 @@ impl Gui {
             Message::Sort => s.sort(),
             Message::SortMode(mode) => s.set_sort_mode(mode),
             Message::Save => s.save_mods_config(),
-            Message::Refresh => s.reload(),
+            Message::Refresh => {
+                if s.dirty && !self.confirm_refresh {
+                    self.confirm_refresh = true;
+                    s.status = "Unsaved changes: press Refresh again to discard them".into();
+                } else {
+                    self.confirm_refresh = false;
+                    s.reload();
+                }
+            }
             Message::Clear => s.clear_active(),
             Message::Launch => s.launch(),
             Message::FetchDbs => s.start_fetch(false),
@@ -174,8 +271,16 @@ impl Gui {
                     s.toggle_user_load_bottom(&pid);
                 }
             }
-            Message::OpenSettings => self.open_settings(),
-            Message::CloseSettings => self.view = View::Main,
+            Message::Nav(View::Settings) => self.open_settings(),
+            Message::Nav(view) => {
+                self.confirm_delete = None;
+                self.view = view;
+                match view {
+                    View::Github => s.reload_github_cache(),
+                    View::Git => s.refresh_git_items(),
+                    _ => {}
+                }
+            }
             Message::SettingsEdit(field, value) => {
                 self.settings_draft.insert(field, value);
             }
@@ -192,18 +297,38 @@ impl Gui {
                     s.settings.set_text_field(field, &value);
                 }
                 if s.save_settings() {
-                    self.view = View::Main;
+                    self.view = View::Mods;
                 }
             }
+            other => self.apply_manage(other),
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
+        let tabs = View::TABS.iter().map(|&(view, label)| {
+            button(label)
+                .on_press(Message::Nav(view))
+                .style(if view == self.view {
+                    button::primary
+                } else {
+                    button::text
+                })
+                .into()
+        });
         let body = match self.view {
-            View::Main => self.main_view(),
+            View::Mods => self.main_view(),
+            View::Workshop => self.workshop_view(),
+            View::Github => self.github_view(),
+            View::Git => self.git_view(),
             View::Settings => self.settings_view(),
         };
-        column![body, self.status_bar()].into()
+        column![
+            row(tabs).spacing(4).padding([4, 8]),
+            rule::horizontal(1),
+            body,
+            self.status_bar()
+        ]
+        .into()
     }
 
     // ---- main window ------------------------------------------------------
@@ -211,7 +336,17 @@ impl Gui {
     fn main_view(&self) -> Element<'_, Message> {
         let s = &self.session;
         let toolbar = row![
-            button("Refresh").on_press(Message::Refresh),
+            button(if self.confirm_refresh {
+                "Discard & refresh"
+            } else {
+                "Refresh"
+            })
+            .on_press(Message::Refresh)
+            .style(if self.confirm_refresh {
+                button::danger
+            } else {
+                button::primary
+            }),
             button("Sort").on_press(Message::Sort),
             pick_list(&SortMode::ALL[..], Some(s.settings.sort_mode), Message::SortMode),
             button("Save").on_press(Message::Save).style(if s.dirty {
@@ -220,12 +355,15 @@ impl Gui {
                 button::primary
             }),
             button("Clear").on_press(Message::Clear).style(button::secondary),
+            button("Import list…")
+                .on_press(Message::ImportList)
+                .style(button::secondary),
+            button("Export list…")
+                .on_press(Message::ExportList)
+                .style(button::secondary),
             space::horizontal(),
             button("Download DBs")
                 .on_press(Message::FetchDbs)
-                .style(button::secondary),
-            button("Settings")
-                .on_press(Message::OpenSettings)
                 .style(button::secondary),
             button("Run game").on_press(Message::Launch),
         ]
@@ -503,7 +641,7 @@ impl Gui {
         if s.settings.game_install_ok() {
             actions = actions.push(
                 button("Cancel")
-                    .on_press(Message::CloseSettings)
+                    .on_press(Message::Nav(View::Mods))
                     .style(button::secondary),
             );
         }
