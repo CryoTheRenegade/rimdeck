@@ -1307,26 +1307,36 @@ impl Session {
     // ---- packs (tracked Workshop collections) ---------------------------------
 
     /// Start tracking a collection (URL or ID) and sync it once its contents arrive.
+    /// Track one or more collections (URLs or IDs separated by spaces, commas or lines).
     pub fn track_pack(&mut self, input: &str) {
-        let Some(id) = workshop::parse_collection_id(input) else {
-            self.status = "Pack: paste a Workshop collection URL or ID".into();
-            return;
-        };
-        if self.settings.packs.iter().any(|p| p.id == id) {
-            self.status = format!("Pack {id} is already tracked");
+        let ids = workshop::collection_ids(input);
+        if ids.is_empty() {
+            self.status = "Pack: paste one or more Workshop collection URLs or IDs".into();
             return;
         }
-        self.settings.packs.push(crate::settings::Pack {
-            id: id.clone(),
-            title: format!("Collection {id}"),
-            items: Vec::new(),
-        });
+        let new: Vec<String> = ids
+            .into_iter()
+            .filter(|id| !self.settings.packs.iter().any(|p| &p.id == id))
+            .collect();
+        if new.is_empty() {
+            self.status = "Already tracking that pack".into();
+            return;
+        }
+        for id in &new {
+            self.settings.packs.push(crate::settings::Pack {
+                id: id.clone(),
+                title: format!("Collection {id}"),
+                items: Vec::new(),
+            });
+        }
         if let Err(e) = self.settings.save() {
             self.status = format!("Could not save settings: {e}");
             return;
         }
-        self.sync_after_check.push(id);
-        self.check_packs();
+        self.sync_after_check.extend(new);
+        if self.packs_rx.is_none() {
+            self.check_packs();
+        } // else: poll_packs starts another check for them when the running one lands
     }
 
     pub fn untrack_pack(&mut self, id: &str) {
@@ -1409,9 +1419,16 @@ impl Session {
             (0, 0) => "Packs are in sync".into(),
             _ => format!("Packs: {added} mod(s) to add, {removed} removed by their authors"),
         };
-        let pending = std::mem::take(&mut self.sync_after_check);
-        if !pending.is_empty() {
-            self.sync_packs(pending);
+        // Packs tracked while that check ran have no status yet; they get their own check.
+        let (ready, later): (Vec<String>, Vec<String>) = std::mem::take(&mut self.sync_after_check)
+            .into_iter()
+            .partition(|id| self.pack_status.iter().any(|p| &p.id == id));
+        self.sync_after_check = later;
+        if !ready.is_empty() {
+            self.sync_packs(ready);
+        }
+        if !self.sync_after_check.is_empty() {
+            self.check_packs();
         }
     }
 

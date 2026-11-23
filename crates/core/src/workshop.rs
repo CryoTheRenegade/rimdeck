@@ -69,6 +69,19 @@ pub fn parse_collection_id(input: &str) -> Option<String> {
     is_pfid(&id).then_some(id)
 }
 
+/// Every collection URL or ID in `input` (separated by spaces, commas or new lines), deduped.
+pub fn collection_ids(input: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for part in input.split(|c: char| c.is_whitespace() || c == ',') {
+        if let Some(id) = parse_collection_id(part) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    ids
+}
+
 pub fn spawn_collection(collection_id: String, tx: Sender<WorkshopMsg>) {
     let tx_thread = tx.clone();
     if let Err(e) = std::thread::Builder::new()
@@ -639,6 +652,11 @@ mod tests {
               {"publishedfileid":"111","sortorder":1,"filetype":0},
               {"publishedfileid":"333","sortorder":3,"filetype":2}]}]}}"#;
         assert_eq!(parse_collection_json(json).unwrap(), vec!["111", "222"]);
+        assert_eq!(
+            collection_ids("https://steamcommunity.com/sharedfiles/filedetails/?id=111, 222
+111"),
+            vec!["111", "222"]
+        );
         let nested = r#"{"response":{"collectiondetails":[{"result":1,"children":[
             {"publishedfileid":"900","sortorder":1,"filetype":2},
             {"publishedfileid":"111","sortorder":2,"filetype":0}]}]}}"#;

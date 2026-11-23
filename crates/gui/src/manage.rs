@@ -343,7 +343,7 @@ impl Gui {
         }
         let track = row![
             text_input(
-                "Track a Workshop collection: paste its URL or ID",
+                "Track Workshop collections: paste one or more URLs or IDs",
                 &self.pack_query
             )
             .on_input(Message::PackQuery)
