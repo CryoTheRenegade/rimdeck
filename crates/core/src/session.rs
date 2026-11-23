@@ -17,7 +17,7 @@ use crate::github::{
     GithubUpdateItem, ReleaseCache,
 };
 use crate::gitmod::{self, GitJob, GitModInfo, GitMsg, GitReport};
-use crate::issues::{check_issues, Issue};
+use crate::issues::{check_issues, Issue, Severity};
 use crate::launch::{self, LaunchKind};
 use crate::lists;
 use crate::model::{resolve_mod, Mod, ModSource};
@@ -52,6 +52,8 @@ pub struct Session {
     pub missing_from_disk: Vec<String>,
     pub mods_config: ModsConfig,
     pub issues: Vec<Issue>,
+    /// From the game's Version.txt, else ModsConfig.xml's `<version>`.
+    pub game_version: Option<String>,
     pub dirty: bool,
     pub status: String,
     pub community_rules: RulesDb,
@@ -177,6 +179,7 @@ impl Session {
             missing_from_disk: Vec::new(),
             mods_config: ModsConfig::default(),
             issues: Vec::new(),
+            game_version: None,
             dirty: false,
             status: String::new(),
             community_rules: RulesDb::default(),
@@ -354,6 +357,10 @@ impl Session {
                 self.dirty = false;
             }
         }
+        self.game_version = std::fs::read_to_string(data.paths[0].join("Version.txt"))
+            .ok()
+            .map(|v| v.trim().to_string())
+            .or_else(|| self.mods_config.version.clone());
         let activated = self.activate_pending();
         self.refresh_issues();
         let extra = if activated > 0 {
@@ -442,7 +449,14 @@ impl Session {
     }
 
     pub fn refresh_issues(&mut self) {
-        self.issues = check_issues(&self.mods, &self.active_paths, &self.missing_from_disk);
+        self.issues = check_issues(
+            &self.mods,
+            &self.active_paths,
+            &self.missing_from_disk,
+            self.game_version.as_deref(),
+        );
+        // Hundreds of version warnings must not bury the errors.
+        self.issues.sort_by_key(|i| i.severity != Severity::Error);
     }
 
     pub fn workshop_installed(&self, pfid: &str) -> bool {

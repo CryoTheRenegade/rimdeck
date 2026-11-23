@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::model::{mod_by_path, Mod};
@@ -16,12 +16,26 @@ pub struct Issue {
     pub message: String,
 }
 
+/// `"1.7.5014 rev1195"` -> `"1.7"`, the form About.xml `supportedVersions` use.
+pub fn major_minor(version: &str) -> Option<String> {
+    let mut parts = version.trim().split(['.', ' ']);
+    let major = parts.next().filter(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty())?;
+    let minor = parts.next().filter(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty())?;
+    Some(format!("{major}.{minor}"))
+}
+
 pub fn check_issues(
     mods: &[Mod],
     active_paths: &[PathBuf],
     missing_from_disk: &[String],
+    game_version: Option<&str>,
 ) -> Vec<Issue> {
     let mut issues = Vec::new();
+    let game_version = game_version.and_then(major_minor);
+    let mut copies: HashMap<&str, Vec<&Mod>> = HashMap::new();
+    for m in mods {
+        copies.entry(m.package_id.as_str()).or_default().push(m);
+    }
     let active_mods: Vec<&Mod> = active_paths
         .iter()
         .filter_map(|p| mod_by_path(mods, p))
@@ -42,6 +56,36 @@ pub fn check_issues(
     }
 
     for m in &active_mods {
+        if let Some(all) = copies.get(m.package_id.as_str()).filter(|c| c.len() > 1) {
+            let sources: Vec<&str> = all.iter().map(|c| c.source.label()).collect();
+            issues.push(Issue {
+                severity: Severity::Warning,
+                package_id: m.package_id.clone(),
+                message: format!(
+                    "{} is installed {} times ({}); using the {} copy",
+                    m.name,
+                    all.len(),
+                    sources.join(", "),
+                    m.source.label()
+                ),
+            });
+        }
+        if let Some(v) = &game_version {
+            if !m.is_ludeon()
+                && !m.supported_versions.is_empty()
+                && !m.supported_versions.iter().any(|s| s.trim() == v)
+            {
+                issues.push(Issue {
+                    severity: Severity::Warning,
+                    package_id: m.package_id.clone(),
+                    message: format!(
+                        "{} does not list RimWorld {v} (supports {})",
+                        m.name,
+                        m.supported_versions.join(", ")
+                    ),
+                });
+            }
+        }
         for dep in &m.dependencies {
             if !active_ids.contains(dep.package_id.as_str()) {
                 let label = if dep.display_name.is_empty() {
@@ -141,7 +185,7 @@ mod tests {
             package_id: "missing.mod".into(),
             display_name: "Missing".into(),
         });
-        let issues = check_issues(&[a], &[PathBuf::from("/a")], &[]);
+        let issues = check_issues(&[a], &[PathBuf::from("/a")], &[], None);
         assert!(issues.iter().any(|i| i.severity == Severity::Error));
     }
 
@@ -150,8 +194,35 @@ mod tests {
         let mut a = mod_at("/a", "a.mod", "A");
         a.incompatible_with.push("b.mod".into());
         let b = mod_at("/b", "b.mod", "B");
-        let issues = check_issues(&[a, b], &[PathBuf::from("/a"), PathBuf::from("/b")], &[]);
+        let issues = check_issues(&[a, b], &[PathBuf::from("/a"), PathBuf::from("/b")], &[], None);
         assert!(issues.iter().any(|i| i.message.contains("incompatible")));
+    }
+
+    #[test]
+    fn major_minor_parses_game_versions() {
+        assert_eq!(major_minor("1.7.5014 rev1195").as_deref(), Some("1.7"));
+        assert_eq!(major_minor("1.5").as_deref(), Some("1.5"));
+        assert_eq!(major_minor("garbage"), None);
+    }
+
+    #[test]
+    fn warns_on_unsupported_version_and_duplicates() {
+        let mut a = mod_at("/a", "a.mod", "A");
+        a.supported_versions = vec!["1.5".into(), "1.6".into()];
+        let mut a2 = mod_at("/ws/a", "a.mod", "A");
+        a2.source = ModSource::Workshop;
+        let mut ok = mod_at("/ok", "ok.mod", "Ok");
+        ok.supported_versions = vec!["1.7".into()];
+        let issues = check_issues(
+            &[a, a2, ok],
+            &[PathBuf::from("/a"), PathBuf::from("/ok")],
+            &[],
+            Some("1.7.5014 rev1195"),
+        );
+        let msgs: Vec<&str> = issues.iter().map(|i| i.message.as_str()).collect();
+        assert!(msgs.iter().any(|m| m.contains("A does not list RimWorld 1.7")));
+        assert!(msgs.iter().any(|m| m.contains("installed 2 times (Local, Workshop)")));
+        assert!(!msgs.iter().any(|m| m.starts_with("Ok ")));
     }
 
     #[test]
@@ -159,7 +230,7 @@ mod tests {
         let mut a = mod_at("/a", "a.mod", "A");
         a.load_after.push("b.mod".into());
         let b = mod_at("/b", "b.mod", "B");
-        let issues = check_issues(&[a, b], &[PathBuf::from("/a"), PathBuf::from("/b")], &[]);
+        let issues = check_issues(&[a, b], &[PathBuf::from("/a"), PathBuf::from("/b")], &[], None);
         assert!(issues.iter().any(|i| i.message.contains("loadAfter")));
     }
 }
