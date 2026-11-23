@@ -34,8 +34,12 @@ struct SteamDbFile {
 
 #[derive(Deserialize, Default)]
 struct SteamDbEntryFile {
-    #[serde(default, alias = "packageid", rename = "packageId")]
+    // Two fields, not an alias: RimSort's DB has entries with both spellings, and an
+    // alias makes serde reject that as a duplicate (which failed the whole file).
+    #[serde(default, rename = "packageId")]
     package_id: String,
+    #[serde(default, rename = "packageid")]
+    package_id_lower: String,
     #[serde(default)]
     name: String,
     #[serde(default)]
@@ -93,7 +97,12 @@ pub fn parse_steam_db_json(text: &str) -> Result<SteamDb, String> {
         serde_json::from_str(text).map_err(|e| format!("failed to parse steam database: {e}"))?;
     let mut database = HashMap::with_capacity(file.database.len());
     for (pfid, entry) in file.database {
-        let package_id = entry.package_id.to_ascii_lowercase();
+        let package_id = if entry.package_id.is_empty() {
+            entry.package_id_lower
+        } else {
+            entry.package_id
+        }
+        .to_ascii_lowercase();
         let deps: Vec<String> = entry
             .dependencies
             .into_keys()
@@ -186,6 +195,12 @@ mod tests {
             "222": {
                 "packageid": "b.mod",
                 "name": "B"
+            },
+            "294100": {
+                "appid": true,
+                "packageid": "ludeon.rimworld",
+                "name": "RimWorld",
+                "packageId": "Ludeon.RimWorld"
             }
         }
     }"#;
@@ -199,6 +214,8 @@ mod tests {
         assert_eq!(a.dependencies, vec!["222".to_string()]);
         assert_eq!(db.get_package("b.mod").unwrap().name, "B");
         assert_eq!(db.pfid_for_package("a.mod"), Some("111"));
+        // Both spellings on one entry, as in RimSort's real steamDB.json.
+        assert_eq!(db.pfid_for_package("ludeon.rimworld"), Some("294100"));
     }
 
     #[test]
