@@ -33,6 +33,16 @@ Both frontends own a `Session`, call `poll()` on a timer, and pass explicit targ
 
 Both frontends share one palette (`crates/gui/src/theme.rs`, mirrored at the top of `crates/tui/src/ui/mod.rs`): steel panels, parchment text, verdigris for selection and primary actions, ochre for warnings and unsaved changes, brick for errors. The GUI uses [Lexend](https://www.lexend.com/) (SIL OFL, bundled in `crates/gui/fonts`).
 
+## Install
+
+```bash
+cargo install rimdeck          # desktop GUI
+cargo install rimdeck-tui      # terminal UI
+cargo install rimdeck-steam    # optional: Steam app backend helper
+```
+
+`cargo install rimdeck-steam` copies only the executable. The helper also needs Valve's Steamworks library next to it (`steam_api64.dll` on Windows, `libsteam_api.so` on Linux, `libsteam_api.dylib` on macOS) in the same folder as `rimdeck-steam` (normally `~/.cargo/bin`). The `steamworks-sys` crate ships it under `lib/steam/redistributable_bin/` (in your cargo registry source folder after the install). Building from a clone with `cargo build --release` puts it in place automatically. Without the helper, use the default SteamCMD backend.
+
 ## Build
 
 ```bash

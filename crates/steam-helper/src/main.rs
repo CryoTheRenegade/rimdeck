@@ -2,8 +2,14 @@
 //! showing RimWorld as running. Kept out of the frontends because it links the Steam API
 //! library at load time.
 //!
-//! GPL-3.0-only with an additional permission to link Valve's Steamworks API library; see
-//! STEAMWORKS-EXCEPTION.md at the repository root.
+//! License: GPL-3.0-only, with this additional permission under GNU GPL version 3 section 7
+//! (also in STEAMWORKS-EXCEPTION.md at https://github.com/CryoTheRenegade/rimdeck):
+//!
+//! If you modify this Program, or any covered work, by linking or combining it with the
+//! Steamworks API library distributed by Valve Corporation (`steam_api64.dll`, `steam_api.dll`,
+//! `libsteam_api.so` or `libsteam_api.dylib`, or a modified version of that library), containing
+//! parts covered by the terms of the Steamworks SDK Access Agreement, the licensors of this
+//! Program grant you additional permission to convey the resulting work.
 //!
 //! Usage: `rimdeck-steam <subscribe|unsubscribe|download> <published file id>...`
 //! Output, one line each (parsed by `rimdeck_core::steam::parse_helper_line`):
