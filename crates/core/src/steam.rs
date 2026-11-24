@@ -53,6 +53,11 @@ pub fn workshop_dir_for_game(game_install: &Path) -> Option<PathBuf> {
 pub fn same_dir(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
+        // Not created yet (an account that never subscribed): Windows paths ignore case.
+        _ if cfg!(windows) => {
+            let norm = |p: &Path| p.to_string_lossy().replace('/', "\\").to_lowercase();
+            norm(a) == norm(b)
+        }
         _ => a == b,
     }
 }
@@ -392,6 +397,15 @@ mod tests {
             Path::new("D:/Steam/steamapps/workshop/content/294100")
         );
         assert_eq!(workshop_dir_for_game(Path::new("C:/Games/RimWorld")), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn same_dir_ignores_case_on_windows_before_the_folder_exists() {
+        assert!(same_dir(
+            Path::new("Q:/No/Such/steamapps/workshop/content/294100"),
+            Path::new(r"q:\no\such\STEAMAPPS\workshop\content\294100")
+        ));
     }
 
     #[test]

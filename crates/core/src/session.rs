@@ -1280,7 +1280,6 @@ impl Session {
         self.run_helper(HelperAction::Unsubscribe, ids);
     }
 
-    /// Start the helper; `false` (reason in `status`) when it can't run now.
     /// Whether the helper can run now; the reason goes to `status` when not.
     fn steam_app_ready(&mut self) -> bool {
         // shortcut: one helper run at a time; later requests are refused, not queued.
@@ -1306,6 +1305,7 @@ impl Session {
         }
     }
 
+    /// Start the helper; `false` (reason in `status`) when it can't run now.
     fn run_helper(&mut self, action: HelperAction, ids: Vec<String>) -> bool {
         if !self.steam_app_ready() {
             return false;
@@ -1359,7 +1359,6 @@ impl Session {
 
     // ---- packs (tracked Workshop collections) ---------------------------------
 
-    /// Start tracking a collection (URL or ID) and sync it once its contents arrive.
     /// Track one or more collections (URLs or IDs separated by spaces, commas or lines).
     pub fn track_pack(&mut self, input: &str) {
         let ids = workshop::collection_ids(input);

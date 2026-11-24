@@ -649,7 +649,9 @@ fn draw_image_warning(frame: &mut Frame, app: &App) {
 }
 
 fn draw_file_explorer(frame: &mut Frame, app: &mut App) {
-    let height = (frame.area().height.saturating_mul(80) / 100).clamp(14, frame.area().height);
+    let height = (frame.area().height.saturating_mul(80) / 100)
+        .max(14)
+        .min(frame.area().height);
     let area = centered(frame.area(), 80, height);
     frame.render_widget(Clear, area);
 
@@ -717,7 +719,9 @@ fn draw_file_explorer(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_workshop(frame: &mut Frame, app: &mut App) {
-    let height = (frame.area().height.saturating_mul(80) / 100).clamp(16, frame.area().height);
+    let height = (frame.area().height.saturating_mul(80) / 100)
+        .max(16)
+        .min(frame.area().height);
     let area = centered(frame.area(), 84, height);
     frame.render_widget(Clear, area);
 
@@ -821,8 +825,11 @@ fn draw_workshop(frame: &mut Frame, app: &mut App) {
     frame.render_stateful_widget(list, chunks[1], &mut app.workshop_state);
 }
 
+// `.max().min()` rather than `clamp`: clamp panics when the terminal is shorter than the minimum.
 fn draw_updates(frame: &mut Frame, app: &mut App) {
-    let height = (frame.area().height.saturating_mul(80) / 100).clamp(14, frame.area().height);
+    let height = (frame.area().height.saturating_mul(80) / 100)
+        .max(14)
+        .min(frame.area().height);
     let area = centered(frame.area(), 84, height);
     frame.render_widget(Clear, area);
     let outer = pane(title("Workshop updates", String::new()), true);
@@ -891,7 +898,9 @@ fn draw_updates(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_packs(frame: &mut Frame, app: &mut App) {
-    let height = (frame.area().height.saturating_mul(80) / 100).clamp(14, frame.area().height);
+    let height = (frame.area().height.saturating_mul(80) / 100)
+        .max(14)
+        .min(frame.area().height);
     let area = centered(frame.area(), 90, height);
     frame.render_widget(Clear, area);
     let outer = pane(title("Packs", "tracked Workshop collections".into()), true);
@@ -985,7 +994,9 @@ fn draw_packs(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_github(frame: &mut Frame, app: &mut App) {
-    let height = (frame.area().height.saturating_mul(80) / 100).clamp(16, frame.area().height);
+    let height = (frame.area().height.saturating_mul(80) / 100)
+        .max(16)
+        .min(frame.area().height);
     let area = centered(frame.area(), 84, height);
     frame.render_widget(Clear, area);
 
@@ -1090,7 +1101,9 @@ fn draw_github(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_git(frame: &mut Frame, app: &mut App) {
-    let height = (frame.area().height.saturating_mul(80) / 100).clamp(16, frame.area().height);
+    let height = (frame.area().height.saturating_mul(80) / 100)
+        .max(16)
+        .min(frame.area().height);
     let area = centered(frame.area(), 84, height);
     frame.render_widget(Clear, area);
 
