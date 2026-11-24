@@ -3899,7 +3899,7 @@ checksum = "459aab4d862e9218eb24ddeec79f6dc6b4377d2500f1a4213d26153b9dca835e"
 
 [[package]]
 name = "rimdeck"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "iced",
  "rfd",
@@ -3909,7 +3909,7 @@ dependencies = [
 
 [[package]]
 name = "rimdeck-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ddsify",
  "directories",
@@ -3928,7 +3928,7 @@ dependencies = [
 
 [[package]]
 name = "rimdeck-steam"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "steamworks",
  "steamworks-sys",
@@ -3936,7 +3936,7 @@ dependencies = [
 
 [[package]]
 name = "rimdeck-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "crossterm",
