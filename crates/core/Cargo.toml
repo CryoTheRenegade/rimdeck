@@ -4,6 +4,7 @@ description = "Shared RimWorld mod-manager logic (scan, sort, rules, Steam, GitH
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 ddsify.workspace = true

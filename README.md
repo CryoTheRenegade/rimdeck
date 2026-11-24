@@ -4,7 +4,7 @@ A RimWorld mod manager written in Rust, with a desktop GUI ([iced](https://iced.
 
 rimdeck is a clone of [RimSort](https://github.com/RimSort/RimSort): scan local, DLC, and Steam Workshop mods, sort load order, surface dependency issues, and write `ModsConfig.xml`. The goal is full RimSort feature parity, with the TUI as usable as the GUI.
 
-This project is licensed under the GNU General Public License v3.0 only, the same license as RimSort. Sort tiers, load-order graphs, and metadata shapes follow RimSort’s implementation (rewritten in Rust, not vendored Python).
+This project is licensed under the GNU General Public License v3.0 only, the same license as RimSort, with an additional permission to link Valve's Steamworks API library ([STEAMWORKS-EXCEPTION.md](STEAMWORKS-EXCEPTION.md)). Sort tiers, load-order graphs, and metadata shapes follow RimSort’s implementation (rewritten in Rust, not vendored Python).
 
 ## Status
 
@@ -113,7 +113,7 @@ Settings are stored in the platform config directory (on Windows: `%APPDATA%\rim
 The source contains no Valve or font binaries besides the Lexend `.ttf` files. If you distribute builds:
 
 - Ship `crates/gui/fonts/OFL.txt` with `rimdeck` (Lexend is embedded in the GUI binary; SIL Open Font License 1.1).
-- `rimdeck-steam` links Valve's proprietary Steamworks API library and is shipped next to it. Distributing that pair needs Valve's Steamworks SDK terms and a license for the helper that permits the link (a GPL-3.0 linking exception, or a permissive license for that crate); sort this out before publishing helper binaries. The GUI and TUI do not link it.
+- `rimdeck-steam` links Valve's proprietary Steamworks API library and is shipped next to it. The GPL side of that link is covered by the additional permission in [STEAMWORKS-EXCEPTION.md](STEAMWORKS-EXCEPTION.md); redistributing Valve's library itself follows Valve's Steamworks SDK terms. The GUI and TUI do not link it.
 
 ## Credits
 

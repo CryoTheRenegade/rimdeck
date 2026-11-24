@@ -2,6 +2,9 @@
 //! showing RimWorld as running. Kept out of the frontends because it links the Steam API
 //! library at load time.
 //!
+//! GPL-3.0-only with an additional permission to link Valve's Steamworks API library; see
+//! STEAMWORKS-EXCEPTION.md at the repository root.
+//!
 //! Usage: `rimdeck-steam <subscribe|unsubscribe|download> <published file id>...`
 //! Output, one line each (parsed by `rimdeck_core::steam::parse_helper_line`):
 //! `progress <text>`, `ok <id>`, `fail <id> <reason>`, `error <reason>`.

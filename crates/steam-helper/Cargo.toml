@@ -4,6 +4,7 @@ description = "Steamworks helper for rimdeck: subscribe, unsubscribe, and re-dow
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 steamworks = "0.13"
