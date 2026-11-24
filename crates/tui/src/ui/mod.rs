@@ -1236,7 +1236,7 @@ fn draw_path_prompt(frame: &mut Frame, app: &App) {
 }
 
 fn draw_help(frame: &mut Frame) {
-    let area = centered(frame.area(), 76, 33);
+    let area = centered(frame.area(), 76, 40);
     frame.render_widget(Clear, area);
     let text = "\
 rimdeck — RimSort-style RimWorld mod manager

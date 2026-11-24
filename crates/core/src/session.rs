@@ -92,6 +92,8 @@ pub struct Session {
     /// An update check has finished at least once, so an empty list means "all current".
     pub updates_checked: bool,
     helper_rx: Option<Receiver<HelperMsg>>,
+    /// Item IDs of the helper run in flight.
+    helper_ids: Vec<String>,
     packs_rx: Option<Receiver<Vec<PackFetch>>>,
     /// Result of the last pack check, one entry per tracked pack.
     pub pack_status: Vec<PackStatus>,
@@ -203,7 +205,12 @@ fn pack_status(
     items: Vec<String>,
     installed: &HashSet<&str>,
 ) -> PackStatus {
-    let added: Vec<String> = items.iter().filter(|i| !synced.contains(i)).cloned().collect();
+    // Not installed counts too: a download that failed after the last sync is retried.
+    let added: Vec<String> = items
+        .iter()
+        .filter(|i| !synced.contains(i) || !installed.contains(i.as_str()))
+        .cloned()
+        .collect();
     let missing = added
         .iter()
         .filter(|i| !installed.contains(i.as_str()))
@@ -266,6 +273,7 @@ impl Session {
             workshop_updates: Vec::new(),
             updates_checked: false,
             helper_rx: None,
+            helper_ids: Vec::new(),
             packs_rx: None,
             pack_status: Vec::new(),
             sync_after_check: Vec::new(),
@@ -335,6 +343,10 @@ impl Session {
 
     /// Rescan and reload the mod list from ModsConfig.xml (explicit refresh, path changes).
     pub fn reload(&mut self) {
+        // Update and pack results describe the previous paths (an instance switch reloads).
+        self.workshop_updates.clear();
+        self.updates_checked = false;
+        self.pack_status.clear();
         self.start_scan(false);
     }
 
@@ -1083,8 +1095,9 @@ impl Session {
         if activated > 0 {
             self.mark_changed(&msg);
         }
-        self.workshop_fetch(missing, false);
-        self.status = msg;
+        if self.workshop_fetch(missing, false) {
+            self.status = msg;
+        }
     }
 
     /// Queue a SteamCMD download; `activate` enables the mod after the next rescan.
@@ -1148,25 +1161,32 @@ impl Session {
     }
 
     /// Download (new) or update Workshop items with the backend chosen in settings.
-    fn workshop_fetch(&mut self, items: Vec<SteamcmdItem>, update: bool) {
+    /// `false` when the request was refused (the reason is in `status`).
+    fn workshop_fetch(&mut self, items: Vec<SteamcmdItem>, update: bool) -> bool {
         if items.is_empty() {
-            return;
+            return true;
         }
         match self.settings.steam_backend {
-            SteamBackend::SteamCmd => self.enqueue_steamcmd(items),
+            SteamBackend::SteamCmd => {
+                self.enqueue_steamcmd(items);
+                true
+            }
             SteamBackend::Steamworks => {
-                for item in items.iter().filter(|i| i.activate) {
-                    if !self.pending_activate.contains(&item.published_file_id) {
-                        self.pending_activate.push(item.published_file_id.clone());
-                    }
-                }
                 let action = if update {
                     HelperAction::Download
                 } else {
                     HelperAction::Subscribe
                 };
-                let ids = items.into_iter().map(|i| i.published_file_id).collect();
-                self.run_helper(action, ids);
+                let ids = items.iter().map(|i| i.published_file_id.clone()).collect();
+                if !self.run_helper(action, ids) {
+                    return false;
+                }
+                for item in items.into_iter().filter(|i| i.activate) {
+                    if !self.pending_activate.contains(&item.published_file_id) {
+                        self.pending_activate.push(item.published_file_id);
+                    }
+                }
+                true
             }
         }
     }
@@ -1258,16 +1278,24 @@ impl Session {
         self.run_helper(HelperAction::Unsubscribe, ids);
     }
 
-    fn run_helper(&mut self, action: HelperAction, ids: Vec<String>) {
+    /// Start the helper; `false` (reason in `status`) when it can't run now.
+    fn run_helper(&mut self, action: HelperAction, ids: Vec<String>) -> bool {
         // shortcut: one helper run at a time; later requests are refused, not queued.
         if self.helper_rx.is_some() {
             self.status = "Steam is still busy with the last request".into();
-            return;
+            return false;
+        }
+        // Steam installs into its own library; a different folder would never show the result.
+        if !steam::acf_path(&self.settings.workshop).is_some_and(|p| p.is_file()) {
+            self.status = "The Steam app backend needs Settings > Workshop to be Steam's own steamapps/workshop/content/294100 folder".into();
+            return false;
         }
         let (tx, rx) = mpsc::channel();
         self.helper_rx = Some(rx);
         self.status = format!("Steam: {} {} item(s)...", action.arg(), ids.len());
+        self.helper_ids = ids.clone();
         steam::spawn_helper(action, ids, tx);
+        true
     }
 
     fn poll_helper(&mut self) {
@@ -1300,7 +1328,12 @@ impl Session {
                     self.rescan_then(summary);
                 }
             }
-            Err(e) => self.status = format!("Steam: {e}"),
+            Err(e) => {
+                // Nothing from this run was installed, so nothing of it should activate later.
+                let ids = std::mem::take(&mut self.helper_ids);
+                self.pending_activate.retain(|p| !ids.contains(p));
+                self.status = format!("Steam: {e}");
+            }
         }
     }
 
@@ -1341,6 +1374,7 @@ impl Session {
 
     pub fn untrack_pack(&mut self, id: &str) {
         self.settings.packs.retain(|p| p.id != id);
+        self.sync_after_check.retain(|p| p != id);
         self.pack_status.retain(|p| p.id != id);
         self.status = match self.settings.save() {
             Ok(_) => "Stopped tracking the pack; its mods stay installed".into(),
@@ -1415,14 +1449,28 @@ impl Session {
         self.pack_status = statuses;
         let added: usize = self.pack_status.iter().map(|p| p.added.len()).sum();
         let removed: usize = self.pack_status.iter().map(|p| p.removed.len()).sum();
-        self.status = match (added, removed) {
-            (0, 0) => "Packs are in sync".into(),
-            _ => format!("Packs: {added} mod(s) to add, {removed} removed by their authors"),
+        let failed = self.pack_status.iter().filter(|p| p.error.is_some()).count();
+        self.status = match (failed, added, removed) {
+            (0, 0, 0) => "Packs are in sync".into(),
+            (0, ..) => format!("Packs: {added} mod(s) to add, {removed} removed by their authors"),
+            _ => format!(
+                "Packs: {failed} couldn't be checked; {added} mod(s) to add, {removed} removed"
+            ),
         };
         // Packs tracked while that check ran have no status yet; they get their own check.
-        let (ready, later): (Vec<String>, Vec<String>) = std::mem::take(&mut self.sync_after_check)
+        // Untracked or failed ones are dropped (a failure shows on the pack).
+        let pending = std::mem::take(&mut self.sync_after_check);
+        let tracked = |id: &String| self.settings.packs.iter().any(|p| &p.id == id);
+        let checked = |id: &String| self.pack_status.iter().find(|p| &p.id == id);
+        let ready: Vec<String> = pending
+            .iter()
+            .filter(|id| checked(id).is_some_and(|st| st.error.is_none()))
+            .cloned()
+            .collect();
+        let later: Vec<String> = pending
             .into_iter()
-            .partition(|id| self.pack_status.iter().any(|p| &p.id == id));
+            .filter(|id| tracked(id) && checked(id).is_none())
+            .collect();
         self.sync_after_check = later;
         if !ready.is_empty() {
             self.sync_packs(ready);
@@ -2282,7 +2330,8 @@ mod tests {
 
     #[test]
     fn pack_status_reports_added_missing_and_removed() {
-        let synced = vec!["1".to_string(), "2".to_string()];
+        // "4" was synced before, but its download never landed: it is retried.
+        let synced = vec!["1".to_string(), "2".to_string(), "4".to_string()];
         let installed = HashSet::from(["1", "3"]);
         let st = pack_status("p", &synced, vec!["1".into(), "3".into(), "4".into()], &installed);
         assert_eq!(st.added, vec!["3", "4"]);
@@ -2317,11 +2366,21 @@ mod tests {
     fn steam_app_backend_routes_downloads_to_the_helper() {
         let mut s = fixture_session();
         s.settings.steam_backend = SteamBackend::Steamworks;
+        // Not Steam's own Workshop folder: refused up front, nothing queued.
+        s.download_workshop("123", "X", true);
+        assert!(s.helper_rx.is_none() && s.pending_activate.is_empty());
+        assert!(s.status.contains("Steam's own"), "{}", s.status);
+
+        let dir = std::env::temp_dir().join(format!("rimdeck-steamapps-{}", std::process::id()));
+        let content = dir.join("steamapps/workshop/content/294100");
+        std::fs::create_dir_all(&content).unwrap();
+        std::fs::write(dir.join("steamapps/workshop/appworkshop_294100.acf"), "").unwrap();
+        s.settings.workshop = content;
         s.download_workshop("123", "X", true);
         assert_eq!(s.pending_activate, vec!["123".to_string()]);
         assert!(s.helper_rx.is_some(), "SteamCMD must not be used");
         assert!(!s.steamcmd_running());
-        // No helper beside the test binary: the run ends with a clear message.
+        // No helper beside the test binary: the run fails clearly and un-queues activation.
         for _ in 0..100 {
             s.poll_helper();
             if s.helper_rx.is_none() {
@@ -2330,6 +2389,8 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(s.status.contains("not found"), "{}", s.status);
+        assert!(s.pending_activate.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -174,6 +174,9 @@ impl Settings {
 
     /// rimdeck was called rimtui: move that config folder over once, before anything is read.
     fn migrate_legacy_config() {
+        if cfg!(test) {
+            return; // would move a real rimtui config into the test dir
+        }
         let old = directories::ProjectDirs::from("", "rimtui", "rimtui");
         if let (Some(old), Some(new)) = (old, Self::config_dir_path()) {
             migrate_config_dir(old.config_dir(), &new);

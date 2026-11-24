@@ -10,11 +10,14 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use steamworks::{Client, ItemState, PublishedFileId, SteamError};
+use steamworks::{Client, DownloadItemResult, ItemState, PublishedFileId, SteamError};
 
 const RIMWORLD_APP_ID: u32 = 294100;
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// Steam may post no DownloadItemResult for an item that is already current; after this
+/// long an installed, idle item counts as done.
+const SETTLE: Duration = Duration::from_secs(10);
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -43,7 +46,9 @@ fn main() {
                 ugc.subscribe_item(item, move |r| {
                     let _ = tx.send(r);
                 });
-                answer(&client, &rx).and_then(|()| installed(&client, item))
+                // Ask for the download explicitly: Steam can hold background Workshop
+                // downloads while it counts RimWorld (this helper) as running.
+                answer(&client, &rx).and_then(|()| download(&client, item))
             }
             "unsubscribe" => {
                 let (tx, rx) = mpsc::channel();
@@ -52,8 +57,7 @@ fn main() {
                 });
                 answer(&client, &rx)
             }
-            _ if ugc.download_item(item, true) => installed(&client, item),
-            _ => Err("Steam refused the download (is the item subscribed?)".into()),
+            _ => download(&client, item),
         };
         match result {
             Ok(()) => println!("ok {id}"),
@@ -77,18 +81,30 @@ fn answer(client: &Client, rx: &Receiver<Result<(), SteamError>>) -> Result<(), 
     }
 }
 
-/// Wait until Steam has the item installed and nothing is pending for it.
-fn installed(client: &Client, item: PublishedFileId) -> Result<(), String> {
+/// Ask Steam to download the item now and wait for its `DownloadItemResult`.
+fn download(client: &Client, item: PublishedFileId) -> Result<(), String> {
     let ugc = client.ugc();
+    let (tx, rx) = mpsc::channel();
+    let _registration = client.register_callback(move |r: DownloadItemResult| {
+        let _ = tx.send(r);
+    });
+    if !ugc.download_item(item, true) {
+        return Err("Steam refused the download (is the item subscribed?)".into());
+    }
     let start = Instant::now();
     let mut last = String::new();
     loop {
         client.run_callbacks();
+        while let Ok(result) = rx.try_recv() {
+            if result.published_file_id == item {
+                return result.error.map_or(Ok(()), |e| Err(e.to_string()));
+            }
+        }
         let state = ugc.item_state(item);
         let busy = state.intersects(
             ItemState::NEEDS_UPDATE | ItemState::DOWNLOADING | ItemState::DOWNLOAD_PENDING,
         );
-        if state.contains(ItemState::INSTALLED) && !busy {
+        if start.elapsed() > SETTLE && state.contains(ItemState::INSTALLED) && !busy {
             return Ok(());
         }
         if let Some(pct) = ugc

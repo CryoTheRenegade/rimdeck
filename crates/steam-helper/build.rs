@@ -7,6 +7,12 @@ use std::{env, fs};
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let target = env::var("TARGET").unwrap_or_default();
+    // The library sits next to the exe, which is not on the Linux/macOS search path.
+    if target.contains("linux") {
+        println!("cargo:rustc-link-arg-bins=-Wl,-rpath,$ORIGIN");
+    } else if target.contains("darwin") {
+        println!("cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path");
+    }
     let lib = if target.contains("windows") {
         "steam_api64.dll"
     } else if target.contains("darwin") {

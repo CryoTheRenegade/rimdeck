@@ -10,7 +10,7 @@ This project is licensed under the GNU General Public License v3.0 only, the sam
 
 Core + TUI: usable sorter plus community/user rules, Steam DB, HTTP fetch of databases, list import/export, game launch, SteamCMD install/update, Steam WebAPI workshop search, GitHub release mods, and a git HEAD updater (clone/pull from GitLab, GitGud, Forgejo, GitHub, …).
 
-GUI: RimSort-style main window (mod info with preview, inactive/active lists with search, double-click to toggle, reorder, sort + sort mode, save, clear, refresh, import/export lists, run game, DB download, issues panel) plus Workshop, GitHub, Git, and Settings tabs.
+GUI: RimSort-style main window (mod info with preview, inactive/active lists with search, double-click to toggle, reorder, sort + sort mode, save, clear, refresh, import/export lists, run game, DB download, issues panel) plus Workshop, Updates (packs and mod updates), GitHub, Git, and Settings tabs.
 
 Both frontends also have: a per-mod rule editor (user loadAfter/loadBefore/loadTop/loadBottom in `userRules.json`), duplicate-install and game-version warnings, Steam Workshop collection import, and instances (named sets of game/mods/workshop/config paths, picked with the Instance setting: a new name creates one, an existing name switches, `-name` deletes).
 
@@ -24,6 +24,7 @@ Texture optimization (RimSort's todds feature) uses [ddsify](https://crates.io/c
 | --- | --- | --- |
 | `rimdeck-core` | `crates/core` | All domain logic plus `session::Session`: mod lists, rules, DBs, and background workers. No UI code. |
 | `rimdeck-tui` | `crates/tui` | Terminal frontend (ratatui). |
+| `rimdeck-steam` | `crates/steam-helper` | Steamworks helper for the Steam app backend; the only binary that links Valve's library. |
 | `rimdeck` | `crates/gui` | Desktop frontend (iced). |
 
 Both frontends own a `Session`, call `poll()` on a timer, and pass explicit targets (paths, package IDs). Selection and widgets stay in the frontend. Settings and databases are shared, so either UI can be used on the same setup.
@@ -86,12 +87,12 @@ Databases are **not** shipped in this repo. Press `d` to fetch RimSort's communi
 
 User rules are written to `userRules.json` in the same folder. Alphabetical sort is RimPy-style (name order with dependencies inserted) and is optional; topological remains the default.
 
-Workshop search (`n`) uses the Steam WebAPI. Put a key in settings or the `STEAM_WEB_API_KEY` / `RIMSORT_STEAM_API_KEY` environment variable (never commit it). Searching by published file ID works without a key. Enter queues a SteamCMD download and activates the mod after rescan; Space downloads only.
+Workshop search (`n`) uses the Steam WebAPI. Put a key in settings or the `STEAM_WEB_API_KEY` / `RIMSORT_STEAM_API_KEY` environment variable (never commit it). Searching by published file ID works without a key. Enter downloads (SteamCMD) or subscribes (Steam app backend) and activates the mod after the rescan; Space does the same without activating.
 
 **Workshop via** (Settings, or the Workshop tab / `b` on the TUI Updates screen) picks how Workshop mods are downloaded and updated:
 
 - **SteamCMD** (default): works without the Steam app; downloads into your Workshop folder; can't subscribe.
-- **Steam app**: uses your running Steam client through the `rimdeck-steam` helper (Steamworks, as RimWorld 294100). Download becomes Subscribe, Update asks Steam to re-download now, and Unsubscribe is available (Steam removes the files). Steam shows you as playing RimWorld only while the helper runs.
+- **Steam app**: uses your running Steam client through the `rimdeck-steam` helper (Steamworks, as RimWorld 294100). Download becomes Subscribe, Update asks Steam to re-download now, and Unsubscribe is available (Steam removes the files). Steam shows you as playing RimWorld only while the helper runs. It needs the Workshop setting to be Steam's own `steamapps/workshop/content/294100` folder, and it can only update or unsubscribe items your account is subscribed to (mods installed by SteamCMD alone are not).
 
 **Packs** (Updates tab, `P` in the TUI) keep modpacks distributed as Workshop collections complete. Track any number of collections by URL or ID (paste several at once, separated by spaces or commas); nested collections are expanded, so a pack whose main collection links its other parts needs only that one. Check compares the collection with its contents at your last sync: Sync activates installed mods the author added (in pack order) and downloads the rest with the Workshop via backend; mods the author removed are listed, never deactivated. The first sync of a newly tracked pack treats every item as added, like a collection import. Updates to the pack's mods themselves come from Updates below.
 
@@ -106,6 +107,13 @@ Git mods (`G`) clone and `git pull --ff-only` HEAD, matching RimSort’s “Add 
 ## Paths
 
 Settings are stored in the platform config directory (on Windows: `%APPDATA%\rimdeck\rimdeck\config\settings.toml`). Game, workshop, and config folders are auto-detected from Steam when possible.
+
+## Releasing binaries
+
+The source contains no Valve or font binaries besides the Lexend `.ttf` files. If you distribute builds:
+
+- Ship `crates/gui/fonts/OFL.txt` with `rimdeck` (Lexend is embedded in the GUI binary; SIL Open Font License 1.1).
+- `rimdeck-steam` links Valve's proprietary Steamworks API library and is shipped next to it. Distributing that pair needs Valve's Steamworks SDK terms and a license for the helper that permits the link (a GPL-3.0 linking exception, or a permissive license for that crate); sort this out before publishing helper binaries. The GUI and TUI do not link it.
 
 ## Credits
 

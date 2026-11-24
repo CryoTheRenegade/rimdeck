@@ -73,7 +73,16 @@ pub fn parse_collection_id(input: &str) -> Option<String> {
 pub fn collection_ids(input: &str) -> Vec<String> {
     let mut ids = Vec::new();
     for part in input.split(|c: char| c.is_whitespace() || c == ',') {
-        if let Some(id) = parse_collection_id(part) {
+        // Every `id=` counts: pasting several URLs into a single-line box can glue them together.
+        let mut found: Vec<String> = part
+            .match_indices("id=")
+            .map(|(i, _)| part[i + 3..].chars().take_while(char::is_ascii_digit).collect())
+            .filter(|id: &String| is_pfid(id))
+            .collect();
+        if found.is_empty() && is_pfid(part) {
+            found.push(part.to_string());
+        }
+        for id in found {
             if !ids.contains(&id) {
                 ids.push(id);
             }
@@ -87,7 +96,7 @@ pub fn spawn_collection(collection_id: String, tx: Sender<WorkshopMsg>) {
     if let Err(e) = std::thread::Builder::new()
         .name("rimdeck-collection".into())
         .spawn(move || {
-            let result = collection_items(&collection_id).map_err(|e| e.to_string());
+            let result = collection_items(&collection_id, false).map_err(|e| e.to_string());
             let _ = tx_thread.send(WorkshopMsg::Collection(result));
         })
     {
@@ -98,12 +107,13 @@ pub fn spawn_collection(collection_id: String, tx: Sender<WorkshopMsg>) {
 }
 
 /// Every item of a collection in order, with nested collections (modpacks split into
-/// parts) expanded in place. GetCollectionDetails needs no API key.
-fn collection_items(collection_id: &str) -> Result<Vec<String>> {
+/// parts) expanded in place. GetCollectionDetails needs no API key. `strict` fails on a
+/// sub-collection error instead of skipping it, so a tracked pack's snapshot is never partial.
+fn collection_items(collection_id: &str, strict: bool) -> Result<Vec<String>> {
     let client = blocking_client()?;
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
-    collect_items(&client, collection_id, &mut seen, &mut out, true)?;
+    collect_items(&client, collection_id, &mut seen, &mut out, !strict, true)?;
     Ok(out)
 }
 
@@ -112,6 +122,7 @@ fn collect_items(
     collection_id: &str,
     seen: &mut std::collections::HashSet<String>,
     out: &mut Vec<String>,
+    lenient: bool,
     root: bool,
 ) -> Result<()> {
     if !seen.insert(collection_id.to_string()) {
@@ -120,7 +131,7 @@ fn collect_items(
     let children = match collection_children(client, collection_id) {
         Ok(children) => children,
         // A private or deleted sub-collection shouldn't sink the whole pack.
-        Err(e) if !root => {
+        Err(e) if lenient && !root => {
             tracing::warn!("sub-collection {collection_id}: {e}");
             return Ok(());
         }
@@ -128,7 +139,7 @@ fn collect_items(
     };
     for (is_collection, id) in children {
         if is_collection {
-            collect_items(client, &id, seen, out, false)?;
+            collect_items(client, &id, seen, out, lenient, false)?;
         } else if !out.contains(&id) {
             out.push(id);
         }
@@ -157,21 +168,13 @@ fn collection_children(
 
 /// Title and every item (nested collections expanded) of a Workshop collection.
 pub fn fetch_pack(collection_id: &str) -> Result<(String, Vec<String>)> {
-    let items = collection_items(collection_id)?;
+    let items = collection_items(collection_id, true)?;
     let title = get_details(&blocking_client()?, collection_id)
         .ok()
         .flatten()
         .map(|item| item.title)
         .unwrap_or_else(|| format!("Collection {collection_id}"));
     Ok((title, items))
-}
-
-/// Item IDs (not nested collections) sorted by `sortorder`.
-pub fn parse_collection_json(text: &str) -> Result<Vec<String>> {
-    Ok(parse_collection_children(text)?
-        .into_iter()
-        .filter_map(|(is_collection, id)| (!is_collection).then_some(id))
-        .collect())
 }
 
 /// Children sorted by `sortorder` as `(is_collection, id)`; other file types are skipped.
@@ -651,11 +654,24 @@ mod tests {
               {"publishedfileid":"222","sortorder":2,"filetype":0},
               {"publishedfileid":"111","sortorder":1,"filetype":0},
               {"publishedfileid":"333","sortorder":3,"filetype":2}]}]}}"#;
-        assert_eq!(parse_collection_json(json).unwrap(), vec!["111", "222"]);
+        let items: Vec<(bool, String)> = parse_collection_children(json).unwrap();
+        assert_eq!(
+            items,
+            vec![
+                (false, "111".to_string()),
+                (false, "222".to_string()),
+                (true, "333".to_string())
+            ]
+        );
         assert_eq!(
             collection_ids("https://steamcommunity.com/sharedfiles/filedetails/?id=111, 222
 111"),
             vec!["111", "222"]
+        );
+        // Two URLs glued together by a single-line paste.
+        assert_eq!(
+            collection_ids("https://x/?id=333https://x/?id=444"),
+            vec!["333", "444"]
         );
         let nested = r#"{"response":{"collectiondetails":[{"result":1,"children":[
             {"publishedfileid":"900","sortorder":1,"filetype":2},
@@ -666,7 +682,7 @@ mod tests {
         );
         let not_collection =
             r#"{"response":{"collectiondetails":[{"publishedfileid":"9","result":1}]}}"#;
-        assert!(parse_collection_json(not_collection).is_err());
+        assert!(parse_collection_children(not_collection).is_err());
     }
 
     #[test]

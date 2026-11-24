@@ -314,11 +314,13 @@ impl Gui {
             s.pack_status.iter().map(f).sum()
         };
         let (added, removed) = (pending(|p| p.added.len()), pending(|p| p.removed.len()));
-        let summary = match (s.settings.packs.len(), s.pack_status.is_empty(), added + removed) {
-            (0, _, _) => "Track a modpack's Workshop collection to keep it complete".to_string(),
-            (_, true, _) => "Not checked yet".to_string(),
-            (_, false, 0) => "All packs are in sync".to_string(),
-            _ => format!("{added} mod(s) to add, {removed} removed by their authors"),
+        let failed = pending(|p| usize::from(p.error.is_some()));
+        let summary = match (s.settings.packs.len(), s.pack_status.is_empty(), failed, added + removed) {
+            (0, ..) => "Track a modpack's Workshop collection to keep it complete".to_string(),
+            (_, true, ..) => "Not checked yet".to_string(),
+            (_, false, 0, 0) => "All packs are in sync".to_string(),
+            (_, false, 0, _) => format!("{added} mod(s) to add, {removed} removed by their authors"),
+            _ => format!("{failed} pack(s) couldn't be checked; {added} to add, {removed} removed"),
         };
         let mut header = row![
             text("Packs").size(17).font(theme::SEMIBOLD),
@@ -343,7 +345,7 @@ impl Gui {
         }
         let track = row![
             text_input(
-                "Track Workshop collections: paste one or more URLs or IDs",
+                "Track Workshop collections: paste URLs or IDs, separated by spaces or commas",
                 &self.pack_query
             )
             .on_input(Message::PackQuery)
