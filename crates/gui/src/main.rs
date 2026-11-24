@@ -39,6 +39,8 @@ fn main() -> iced::Result {
         .window(iced::window::Settings {
             size: iced::Size::new(1400.0, 860.0),
             min_size: Some(iced::Size::new(1000.0, 540.0)),
+            // Rendered from assets/icon.svg; lives in this crate so the published package has it.
+            icon: iced::window::icon::from_file_data(include_bytes!("../icon-256.png"), None).ok(),
             ..Default::default()
         })
         .run()

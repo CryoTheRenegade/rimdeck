@@ -1,4 +1,9 @@
-# rimdeck
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/CryoTheRenegade/rimdeck/master/assets/logo.svg">
+    <img alt="rimdeck" src="https://raw.githubusercontent.com/CryoTheRenegade/rimdeck/master/assets/logo-light.svg" width="420">
+  </picture>
+</h1>
 
 A RimWorld mod manager written in Rust, with a desktop GUI ([iced](https://iced.rs/)) and a terminal UI ([ratatui](https://ratatui.rs/)) built on one shared core.
 
@@ -31,7 +36,7 @@ Both frontends own a `Session`, call `poll()` on a timer, and pass explicit targ
 
 ## Look
 
-Both frontends share one palette (`crates/gui/src/theme.rs`, mirrored at the top of `crates/tui/src/ui/mod.rs`): steel panels, parchment text, verdigris for selection and primary actions, ochre for warnings and unsaved changes, brick for errors. The GUI uses [Lexend](https://www.lexend.com/) (SIL OFL, bundled in `crates/gui/fonts`).
+The logo (`assets/`) is a stepped deck of load-order rows on a steel plate, designed by GPT Sol. Both frontends share one palette (`crates/gui/src/theme.rs`, mirrored at the top of `crates/tui/src/ui/mod.rs`): steel panels, parchment text, verdigris for selection and primary actions, ochre for warnings and unsaved changes, brick for errors. The GUI uses [Lexend](https://www.lexend.com/) (SIL OFL, bundled in `crates/gui/fonts`).
 
 ## Install
 

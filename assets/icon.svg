@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">rimdeck icon</title>
+  <rect x="16" y="16" width="224" height="224" rx="40" fill="#4A535A"/>
+  <rect x="24" y="24" width="208" height="208" rx="32" fill="#30363B"/>
+  <path fill="#6FA8A0" d="M48 64h16v32H48z M80 64h112l16 16v16H80z"/>
+  <path fill="#E8E1CE" d="M48 112h16v32H48z M80 112h96l16 16v16H80z"/>
+  <path fill="#9AA0A3" d="M48 160h16v32H48z M80 160h80l16 16v16H80z"/>
+</svg>
