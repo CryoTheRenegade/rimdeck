@@ -60,29 +60,30 @@ pub fn spawn(req: SearchRequest, tx: Sender<WorkshopMsg>) {
 
 /// `123`, or a workshop URL with `?id=123`.
 pub fn parse_collection_id(input: &str) -> Option<String> {
-    let input = input.trim();
-    if is_pfid(input) {
-        return Some(input.to_string());
+    ids_in(input.trim()).into_iter().next()
+}
+
+/// Every `?id=` / `&id=` value in one token (not `appid=`), or the token itself if it is an ID.
+/// A single-line paste can glue several URLs into one token.
+fn ids_in(part: &str) -> Vec<String> {
+    let ids: Vec<String> = part
+        .match_indices("id=")
+        .filter(|(i, _)| *i == 0 || matches!(part.as_bytes()[i - 1], b'?' | b'&'))
+        .map(|(i, _)| part[i + 3..].chars().take_while(char::is_ascii_digit).collect())
+        .filter(|id: &String| is_pfid(id))
+        .collect();
+    if ids.is_empty() && is_pfid(part) {
+        vec![part.to_string()]
+    } else {
+        ids
     }
-    let (_, rest) = input.split_once("id=")?;
-    let id: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    is_pfid(&id).then_some(id)
 }
 
 /// Every collection URL or ID in `input` (separated by spaces, commas or new lines), deduped.
 pub fn collection_ids(input: &str) -> Vec<String> {
     let mut ids = Vec::new();
     for part in input.split(|c: char| c.is_whitespace() || c == ',') {
-        // Every `id=` counts: pasting several URLs into a single-line box can glue them together.
-        let mut found: Vec<String> = part
-            .match_indices("id=")
-            .map(|(i, _)| part[i + 3..].chars().take_while(char::is_ascii_digit).collect())
-            .filter(|id: &String| is_pfid(id))
-            .collect();
-        if found.is_empty() && is_pfid(part) {
-            found.push(part.to_string());
-        }
-        for id in found {
+        for id in ids_in(part) {
             if !ids.contains(&id) {
                 ids.push(id);
             }
@@ -668,6 +669,11 @@ mod tests {
 111"),
             vec!["111", "222"]
         );
+        assert_eq!(
+            collection_ids("https://x/?appid=294100&id=555 https://x/?id=666&appid=294100"),
+            vec!["555", "666"]
+        );
+        assert_eq!(parse_collection_id("https://x/?appid=294100&id=777").as_deref(), Some("777"));
         // Two URLs glued together by a single-line paste.
         assert_eq!(
             collection_ids("https://x/?id=333https://x/?id=444"),

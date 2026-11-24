@@ -35,6 +35,28 @@ pub fn acf_path(workshop: &Path) -> Option<PathBuf> {
     Some(dir.join(format!("appworkshop_{RIMWORLD_STEAM_APP_ID}.acf")))
 }
 
+/// Where Steam puts this game's Workshop items: the same library as the game
+/// (`<lib>/steamapps/common/RimWorld` -> `<lib>/steamapps/workshop/content/294100`).
+pub fn workshop_dir_for_game(game_install: &Path) -> Option<PathBuf> {
+    let common = game_install.parent()?;
+    let steamapps = common.parent()?;
+    let named = |p: &Path, n: &str| p.file_name().is_some_and(|f| f.eq_ignore_ascii_case(n));
+    (named(common, "common") && named(steamapps, "steamapps")).then(|| {
+        steamapps
+            .join("workshop")
+            .join("content")
+            .join(RIMWORLD_STEAM_APP_ID)
+    })
+}
+
+/// Same folder, also when one spelling differs (separators, case) and both exist.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 /// `pfid -> timeupdated` for every item under `WorkshopItemsInstalled` in an acf file.
 pub fn installed_times(acf: &str) -> HashMap<String, u64> {
     let tokens = tokenize(acf);
@@ -361,6 +383,15 @@ mod tests {
             acf_path(ws).unwrap(),
             Path::new("D:/Steam/steamapps/workshop/appworkshop_294100.acf")
         );
+    }
+
+    #[test]
+    fn workshop_folder_follows_the_game_library() {
+        assert_eq!(
+            workshop_dir_for_game(Path::new("D:/Steam/steamapps/common/RimWorld")).unwrap(),
+            Path::new("D:/Steam/steamapps/workshop/content/294100")
+        );
+        assert_eq!(workshop_dir_for_game(Path::new("C:/Games/RimWorld")), None);
     }
 
     #[test]

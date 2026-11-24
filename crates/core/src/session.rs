@@ -1102,7 +1102,8 @@ impl Session {
 
     /// Queue a SteamCMD download; `activate` enables the mod after the next rescan.
     pub fn download_workshop(&mut self, published_file_id: &str, title: &str, activate: bool) {
-        let already = self.steamcmd_running();
+        let already =
+            self.settings.steam_backend == SteamBackend::SteamCmd && self.steamcmd_running();
         self.workshop_fetch(
             vec![SteamcmdItem {
                 published_file_id: published_file_id.to_string(),
@@ -1147,7 +1148,8 @@ impl Session {
             .mod_ref(path)
             .map(|m| m.name.clone())
             .unwrap_or_else(|| pfid.clone());
-        let already = self.steamcmd_running();
+        let already =
+            self.settings.steam_backend == SteamBackend::SteamCmd && self.steamcmd_running();
         self.workshop_fetch(
             vec![SteamcmdItem {
                 published_file_id: pfid,
@@ -1279,15 +1281,33 @@ impl Session {
     }
 
     /// Start the helper; `false` (reason in `status`) when it can't run now.
-    fn run_helper(&mut self, action: HelperAction, ids: Vec<String>) -> bool {
+    /// Whether the helper can run now; the reason goes to `status` when not.
+    fn steam_app_ready(&mut self) -> bool {
         // shortcut: one helper run at a time; later requests are refused, not queued.
         if self.helper_rx.is_some() {
             self.status = "Steam is still busy with the last request".into();
             return false;
         }
-        // Steam installs into its own library; a different folder would never show the result.
-        if !steam::acf_path(&self.settings.workshop).is_some_and(|p| p.is_file()) {
-            self.status = "The Steam app backend needs Settings > Workshop to be Steam's own steamapps/workshop/content/294100 folder".into();
+        // Steam installs into the library that holds the game; another folder never shows it.
+        match steam::workshop_dir_for_game(&self.settings.game_install) {
+            Some(expected) if steam::same_dir(&expected, &self.settings.workshop) => true,
+            Some(expected) => {
+                self.status = format!(
+                    "The Steam app backend needs Settings > Workshop to be {}",
+                    expected.display()
+                );
+                false
+            }
+            None => {
+                self.status =
+                    "The Steam app backend needs a Steam copy of RimWorld (Game install under steamapps/common)".into();
+                false
+            }
+        }
+    }
+
+    fn run_helper(&mut self, action: HelperAction, ids: Vec<String>) -> bool {
+        if !self.steam_app_ready() {
             return false;
         }
         let (tx, rx) = mpsc::channel();
@@ -1440,8 +1460,12 @@ impl Session {
                     pack_status(&id, &pack.items, items, &installed)
                 }
                 Err(e) => PackStatus {
+                    id: id.clone(),
+                    items: pack.items.clone(),
+                    added: Vec::new(),
+                    missing: Vec::new(),
+                    removed: Vec::new(),
                     error: Some(e),
-                    ..pack_status(&id, &pack.items, pack.items.clone(), &installed)
                 },
             });
         }
@@ -1483,6 +1507,16 @@ impl Session {
     /// Add what the authors added since the last check: activate installed items in pack
     /// order and download the rest. Removed items are only reported, never deactivated.
     pub fn sync_packs(&mut self, ids: Vec<String>) {
+        let needs_download = self
+            .pack_status
+            .iter()
+            .any(|p| ids.contains(&p.id) && p.error.is_none() && !p.missing.is_empty());
+        if needs_download
+            && self.settings.steam_backend == SteamBackend::Steamworks
+            && !self.steam_app_ready()
+        {
+            return; // nothing recorded; the reason is in `status`
+        }
         let mut added = Vec::new();
         let mut removed = Vec::new();
         for status in self.pack_status.iter_mut().filter(|p| ids.contains(&p.id)) {
@@ -2366,16 +2400,22 @@ mod tests {
     fn steam_app_backend_routes_downloads_to_the_helper() {
         let mut s = fixture_session();
         s.settings.steam_backend = SteamBackend::Steamworks;
-        // Not Steam's own Workshop folder: refused up front, nothing queued.
+        // The fixture game is not in a Steam library: refused up front, nothing queued.
         s.download_workshop("123", "X", true);
         assert!(s.helper_rx.is_none() && s.pending_activate.is_empty());
-        assert!(s.status.contains("Steam's own"), "{}", s.status);
+        assert!(s.status.contains("steamapps/common"), "{}", s.status);
 
         let dir = std::env::temp_dir().join(format!("rimdeck-steamapps-{}", std::process::id()));
-        let content = dir.join("steamapps/workshop/content/294100");
-        std::fs::create_dir_all(&content).unwrap();
-        std::fs::write(dir.join("steamapps/workshop/appworkshop_294100.acf"), "").unwrap();
-        s.settings.workshop = content;
+        let game = dir.join("steamapps/common/RimWorld");
+        std::fs::create_dir_all(&game).unwrap();
+        s.settings.game_install = game;
+        // Wrong Workshop folder for that library: refused, and the right one is named.
+        s.settings.workshop = dir.join("elsewhere");
+        s.download_workshop("123", "X", true);
+        assert!(s.helper_rx.is_none(), "{}", s.status);
+        assert!(s.status.contains("294100"), "{}", s.status);
+        // No appworkshop acf yet (account never subscribed): still allowed.
+        s.settings.workshop = dir.join("steamapps/workshop/content/294100");
         s.download_workshop("123", "X", true);
         assert_eq!(s.pending_activate, vec!["123".to_string()]);
         assert!(s.helper_rx.is_some(), "SteamCMD must not be used");

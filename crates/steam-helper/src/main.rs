@@ -89,7 +89,7 @@ fn download(client: &Client, item: PublishedFileId) -> Result<(), String> {
         let _ = tx.send(r);
     });
     if !ugc.download_item(item, true) {
-        return Err("Steam refused the download (is the item subscribed?)".into());
+        return Err("Steam refused the download".into());
     }
     let start = Instant::now();
     let mut last = String::new();

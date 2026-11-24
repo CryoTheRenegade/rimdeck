@@ -1197,7 +1197,7 @@ fn draw_path_prompt(frame: &mut Frame, app: &App) {
         PathPromptKind::Export => ("Export mod list", "Enter write  Esc cancel", "Path"),
         PathPromptKind::Pack => (
             "Track a pack",
-            "Paste one or more collection URLs or IDs (space-separated)  Enter track and sync  Esc cancel",
+            "Paste one or more collection URLs or IDs (spaces or commas)  Enter track and sync  Esc cancel",
             "Collection",
         ),
         PathPromptKind::Rule => {
